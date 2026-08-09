@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual env
+.venv/
+venv/
+env/
+.env
+
+# アプリのデータ・機密(共有しない)
+# settings.local.json = Telegramトークン・個人情報・予約情報
+# settings.share.json = 友達配布用(実サイト情報入り。リポジトリには含めない)
+settings.local.json
+settings.share.json
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+logs/
+*.log
+
+# PyInstaller (配布用exeビルド)
+build/
+dist/
+*.spec
+
+# ローカルツール設定
+.claude/
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

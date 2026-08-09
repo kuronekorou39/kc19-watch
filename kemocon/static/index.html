@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>空室監視ダッシュボード</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #181b22; --panel2: #1f232c; --border: #2a2f3a;
+    --text: #e6e9ef; --muted: #9aa4b2; --accent: #4f8cff; --ok: #2fbf71;
+    --bad: #ff5d6c; --warn: #f5b74f; --shadow: 0 1px 3px rgba(0,0,0,.4);
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f4f6fa; --panel:#fff; --panel2:#f0f3f8; --border:#dde2ea;
+      --text:#1b2029; --muted:#5b6472; --shadow:0 1px 3px rgba(0,0,0,.08); }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui,-apple-system,"Segoe UI","Yu Gothic UI",sans-serif;
+    background: var(--bg); color: var(--text); line-height:1.5; }
+  header { display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:14px 20px; background: var(--panel); border-bottom:1px solid var(--border); }
+  header h1 { font-size:18px; margin:0; font-weight:700; }
+  .pill { padding:4px 12px; border-radius:999px; font-size:13px; font-weight:600; }
+  .pill.on { background: rgba(47,191,113,.15); color: var(--ok); }
+  .pill.off { background: rgba(255,93,108,.15); color: var(--bad); }
+  .spacer { flex:1; }
+  .muted { color: var(--muted); font-size:13px; }
+  main { max-width:1200px; margin:0 auto; padding:20px; }
+  .controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:18px; }
+  button { font:inherit; cursor:pointer; border:1px solid var(--border); background:var(--panel2);
+    color:var(--text); padding:8px 16px; border-radius:8px; font-weight:600; transition:.15s; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color:#fff; }
+  button.danger { background: var(--bad); border-color: var(--bad); color:#fff; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  input, select, textarea { font:inherit; background:var(--panel2); color:var(--text);
+    border:1px solid var(--border); border-radius:8px; padding:7px 10px; }
+  input[type=number] { width:90px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:16px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:16px 18px; box-shadow:var(--shadow); }
+  .card h2 { font-size:14px; margin:0 0 12px; color:var(--muted); text-transform:uppercase;
+    letter-spacing:.04em; font-weight:700; }
+  .roomname { font-weight:700; margin-bottom:12px; }
+  .dates { display:flex; gap:10px; }
+  .date { flex:1; text-align:center; border:1px solid var(--border); border-radius:10px; padding:10px 4px; }
+  .date .d { font-size:12px; color:var(--muted); }
+  .date .s { font-size:22px; font-weight:800; margin-top:4px; }
+  .date.ok { border-color:var(--ok); background:rgba(47,191,113,.10); }
+  .date.ok .s { color:var(--ok); }
+  .date.bad .s { color:var(--bad); }
+  table.matrix { width:100%; border-collapse:collapse; margin-top:4px; }
+  table.matrix th, table.matrix td { border:1px solid var(--border); padding:9px 6px; text-align:center; font-size:16px; }
+  table.matrix th { color:var(--muted); font-weight:600; font-size:12px; }
+  table.matrix td.rowh { color:var(--text); font-size:13px; font-weight:600; text-align:left; padding-left:10px; white-space:nowrap; }
+  table.matrix td.ok { color:var(--ok); font-weight:800; background:rgba(47,191,113,.12); }
+  table.matrix td.bad { color:var(--bad); font-weight:800; }
+  table.matrix td.na { color:var(--muted); font-weight:400; }
+  table.matrix td.ok:hover { background:rgba(47,191,113,.22); }
+  .booklink { color:var(--ok); font-weight:800; text-decoration:none; white-space:nowrap; }
+  .booklink:hover { text-decoration:underline; }
+  .planlink { color:inherit; text-decoration:none; border-bottom:1px dotted var(--muted); }
+  .planlink:hover { color:var(--accent); border-color:var(--accent); }
+  .summary { margin-bottom:16px; }
+  .sum-head { display:flex; align-items:baseline; justify-content:space-between; gap:10px 16px; flex-wrap:wrap; margin-bottom:12px; }
+  .sum-head h2 { font-size:17px; margin:0; color:var(--text); text-transform:none; letter-spacing:0; }
+  .statusline { display:flex; gap:6px 16px; flex-wrap:wrap; margin-top:14px; padding-top:12px;
+    border-top:1px solid var(--border); font-size:13px; color:var(--muted); }
+  .statusline b { color:var(--text); font-weight:700; }
+  #chart svg { width:100%; height:auto; display:block; overflow:visible; }
+  #chart .axis { stroke: var(--border); stroke-width:1; }
+  #chart .grid { stroke: var(--border); stroke-width:1; opacity:.35; }
+  #chart text { fill: var(--muted); font-size:11px; }
+  .legend { display:flex; gap:18px; flex-wrap:wrap; margin-top:10px; }
+  .legend span { display:inline-flex; align-items:center; gap:6px; font-size:13px; }
+  .legend i { width:16px; height:3px; border-radius:2px; display:inline-block; }
+  .banner { margin-top:12px; padding:10px; border-radius:8px; text-align:center; font-weight:700;
+    background:rgba(245,183,79,.15); color:var(--warn); display:none; }
+  .kv { display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px solid var(--border); font-size:14px; }
+  .kv:last-child { border-bottom:none; }
+  .kv .k { color:var(--muted); }
+  .history { max-height:200px; overflow:auto; font-size:13px; }
+  .history div { padding:4px 0; border-bottom:1px solid var(--border); }
+  section.logs { margin-top:20px; }
+  .tabs { display:flex; gap:6px; margin-bottom:8px; align-items:center; }
+  .tab { padding:6px 14px; border-radius:8px 8px 0 0; background:var(--panel2); border:1px solid var(--border);
+    border-bottom:none; font-size:13px; }
+  .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  #logbox { background:#0b0d11; color:#cdd3dc; font-family:ui-monospace,"Cascadia Code",Consolas,monospace;
+    font-size:12.5px; height:320px; overflow:auto; padding:12px; border-radius:0 8px 8px 8px; border:1px solid var(--border); }
+  #logbox .line { white-space:pre-wrap; padding:1px 0; }
+  #logbox .ERROR { color:var(--bad); } #logbox .WARNING { color:var(--warn); }
+  #logbox .ts { color:var(--muted); }
+  details.settings { margin-top:20px; background:var(--panel); border:1px solid var(--border);
+    border-radius:12px; padding:8px 18px; }
+  details.settings summary { cursor:pointer; font-weight:700; padding:8px 0; }
+  .form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin:14px 0; }
+  .field { display:flex; flex-direction:column; gap:4px; }
+  .field label { font-size:12px; color:var(--muted); }
+  .field input, .field select, .field textarea { width:100%; }
+  .subhead { font-weight:700; margin:14px 0 4px; font-size:13px; color:var(--accent); }
+  .note { font-size:12px; color:var(--muted); margin:6px 0; }
+  .toast { position:fixed; bottom:20px; right:20px; background:var(--panel); border:1px solid var(--accent);
+    padding:12px 18px; border-radius:10px; box-shadow:var(--shadow); opacity:0; transition:.3s; }
+  .toast.show { opacity:1; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏨 空室監視ダッシュボード</h1>
+  <span id="pill" class="pill off">停止中</span>
+  <span class="spacer"></span>
+  <span class="muted" id="uptime">稼働 --</span>
+</header>
+
+<main>
+  <!-- 報告用サマリー(トップに必要データを集約・スクショ用) -->
+  <div class="card summary">
+    <div class="sum-head">
+      <h2>🏨 空室監視</h2>
+      <span class="muted">対象日は下表のとおり</span>
+    </div>
+    <div id="matrix"><span class="muted">未取得</span></div>
+    <div class="banner" id="banner">🔥 3連泊のチェックイン日が空きました！予約可能です</div>
+    <div class="statusline" id="statusline"></div>
+  </div>
+
+  <div class="controls">
+    <button id="btnStart" class="primary">▶ 監視開始</button>
+    <button id="btnStop" class="danger">⏹ 停止</button>
+    <button id="btnCheck">🔄 今すぐチェック</button>
+    <button id="btnTest">🔔 テスト通知</button>
+    <span class="muted">間隔</span>
+    <input type="number" id="interval" min="30" step="10" value="90"> <span class="muted">秒</span>
+    <button id="btnInterval">↻ 間隔を適用</button>
+  </div>
+
+  <section class="card" style="margin-top:16px;">
+    <h2>📊 空室数の推移 <span class="muted" id="chartStats" style="font-weight:400;text-transform:none;letter-spacing:0;"></span></h2>
+    <div id="chart"><span class="muted">データがありません（監視すると蓄積されます）</span></div>
+    <div id="legend" class="legend"></div>
+  </section>
+
+  <div class="grid">
+    <div class="card">
+      <h2>📈 変化履歴</h2>
+      <div class="history" id="history"><span class="muted">まだありません</span></div>
+    </div>
+    <div class="card">
+      <h2>🕒 監視期間（監査ログ）</h2>
+      <div class="history" id="sessions"><span class="muted">まだありません</span></div>
+    </div>
+  </div>
+
+  <section class="logs">
+    <div class="tabs">
+      <div class="tab active" data-src="all">すべて</div>
+      <div class="tab" data-src="bot">BOT</div>
+      <div class="tab" data-src="http">HTTP</div>
+      <span class="spacer"></span>
+      <input type="text" id="logfilter" placeholder="フィルタ..." style="font-size:13px;">
+      <label class="muted"><input type="checkbox" id="autoscroll" checked> 自動スクロール</label>
+    </div>
+    <div id="logbox"></div>
+  </section>
+
+  <details class="settings">
+    <summary>⚙️ 監視設定</summary>
+    <div class="form-grid" id="monForm">
+      <div class="field"><label>施設ID (id)</label><input data-k="monitor.yado_id"></div>
+      <div class="field"><label>検索人数 (カンマ区切り)</label><input data-k="monitor.guest_nums" data-list="1"></div>
+      <div class="field"><label>ty</label><input data-k="monitor.api_ty"></div>
+      <div class="field"><label>対象年</label><input data-k="monitor.target_year"></div>
+      <div class="field" style="grid-column:1/-1;"><label>監視する部屋 (JSON: [{"label","room_id"}])</label><textarea data-k="monitor.target_rooms" data-json="1" rows="3"></textarea></div>
+      <div class="field" style="grid-column:1/-1;"><label>プラン設定 (JSON: [{"id","label","dates":[...],"nights":N}] ／ 3連泊は初日だけ, 1泊は各日)</label><textarea data-k="monitor.plans" data-json="1" rows="4"></textarea></div>
+      <div class="field"><label>監視間隔(秒)</label><input type="number" data-k="monitor.interval_seconds"></div>
+      <div class="field"><label>起動時に自動開始</label><select data-k="monitor.auto_start" data-bool="1"><option value="false">しない</option><option value="true">する</option></select></div>
+      <div class="field"><label>解禁バースト（時間帯だけ間隔を狭める）</label><select data-k="monitor.burst.enabled" data-bool="1"><option value="false">無効</option><option value="true">有効</option></select></div>
+      <div class="field"><label>バースト間隔(秒)</label><input type="number" data-k="monitor.burst.interval_seconds"></div>
+      <div class="field"><label>バースト開始</label><input data-k="monitor.burst.start" placeholder="2026-08-04 19:50"></div>
+      <div class="field"><label>バースト終了</label><input data-k="monitor.burst.end" placeholder="2026-08-04 20:45"></div>
+      <div class="field" style="grid-column:1/-1;"><label>予約ページURL</label><input data-k="monitor.menu_url"></div>
+      <div class="field" style="grid-column:1/-1;"><label>Telegram Bot Token (変更時のみ入力・保存後はアプリ再起動で反映)</label><input data-k="telegram.bot_token" placeholder="********"></div>
+    </div>
+    <button class="primary" onclick="saveSettings()">💾 監視設定を保存</button>
+  </details>
+
+  <details class="settings">
+    <summary>📝 予約設定（自動予約フォーム入力用）</summary>
+    <p class="note">「有効化」すると、空室検知時に予約フォームを<b>自動で開いて入力し画面を残します</b>（Botは確定しません＝あなたが最後に確認して予約完了）。保存先は gitignore 済みの <code>settings.local.json</code>（手元のみ）。</p>
+    <div class="form-grid">
+      <div class="field"><label>自動起動を有効化</label><select data-k="reservation.enabled" data-bool="1"><option value="false">無効</option><option value="true">有効</option></select></div>
+      <div class="field"><label>対象部屋ID (カンマ区切り, 空=全部)</label><input data-k="reservation.auto_book_room_ids" data-list="1"></div>
+      <div class="field"><label>対象プランID (カンマ区切り, 空=全部)</label><input data-k="reservation.auto_book_plan_ids" data-list="1"></div>
+      <div class="field"><label>同時に開く窓の上限</label><input type="number" data-k="reservation.max_windows" min="1"></div>
+      <div class="field"><label>チェックイン時刻</label><input data-k="reservation.checkin_time" placeholder="15:00"></div>
+      <div class="field"><label>支払い方法</label><select data-k="reservation.payment_method"><option>現地決済</option><option>クレジットカード事前決済</option></select></div>
+      <div class="field"><label>大人(男性)人数</label><input type="number" data-k="reservation.adults_male" min="0"></div>
+      <div class="field"><label>大人(女性)人数</label><input type="number" data-k="reservation.adults_female" min="0"></div>
+    </div>
+    <div class="subhead">代表者情報（予約フォームの項目に対応）</div>
+    <div class="form-grid">
+      <div class="field"><label>氏名（例: 山田 太郎）</label><input data-k="reservation.guest.name"></div>
+      <div class="field"><label>読みがな（例: やまだ たろう）</label><input data-k="reservation.guest.kana"></div>
+      <div class="field"><label>電話（例: 09000000000）</label><input data-k="reservation.guest.tel"></div>
+      <div class="field"><label>メール</label><input data-k="reservation.guest.email"></div>
+      <div class="field"><label>郵便番号 前3桁</label><input data-k="reservation.guest.post1" placeholder="412"></div>
+      <div class="field"><label>郵便番号 後4桁</label><input data-k="reservation.guest.post2" placeholder="0000"></div>
+      <div class="field"><label>都道府県（例: 静岡県）</label><input data-k="reservation.guest.pref"></div>
+      <div class="field" style="grid-column:1/-1;"><label>住所（都道府県より下）</label><input data-k="reservation.guest.address"></div>
+    </div>
+    <div class="form-grid">
+      <div class="field"><label>ヘッドレス実行</label><select data-k="reservation.headless" data-bool="1"><option value="true">ヘッドレス</option><option value="false">画面あり</option></select></div>
+    </div>
+    <button class="primary" onclick="saveSettings()">💾 予約設定を保存</button>
+  </details>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let curSrc = "all", allLogs = [];
+
+function fmtDur(sec){ if(sec==null) return "--"; const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;
+  return (h?h+"h":"")+(m?m+"m":"")+s+"s"; }
+
+function dcmp(a,b){ const [m1,d1]=a.split('/').map(Number),[m2,d2]=b.split('/').map(Number); return m1-m2||d1-d2; }
+function renderStatus(st){
+  const on = st.monitoring;
+  const pill = $("#pill"); pill.textContent = on?"稼働中":"停止中"; pill.className = "pill "+(on?"on":"off");
+  $("#uptime").textContent = "稼働 " + fmtDur(st.uptime_seconds);
+  $("#btnStart").disabled = on; $("#btnStop").disabled = !on;
+  const mc = st.monitor_cfg||{};
+  if(mc.interval_min) $("#interval").min = mc.interval_min;
+  if(mc.interval_max) $("#interval").max = mc.interval_max;
+
+  const targets = Object.values(st.room_status||{});
+  const box = $("#matrix");
+  if(targets.length){
+    // 部屋ごとにグループ化 → 各部屋で プラン×日付 の表
+    const byRoom = {};
+    targets.forEach(e=>{ (byRoom[e.room_label] = byRoom[e.room_label]||[]).push(e); });
+    let html='', banner=false;
+    Object.keys(byRoom).forEach(room=>{
+      const entries = byRoom[room];
+      const allDates=[...new Set(entries.flatMap(e=>e.dates||[]))].sort(dcmp);
+      html += `<div style="margin-bottom:16px;"><div style="font-weight:700;margin-bottom:6px;">🏨 ${room}</div>`;
+      html += '<table class="matrix"><tr><th style="text-align:left;">プラン＼日付</th>'+allDates.map(d=>`<th>${d}</th>`).join('')+'</tr>';
+      entries.forEach(e=>{
+        const dates=e.dates||[], counts=e.counts||{}, bu=e.book_url;
+        const labelCell = bu ? `<a href="${bu}" target="_blank" rel="noopener" class="planlink">${e.plan_label}</a>` : e.plan_label;
+        html += `<tr><td class="rowh">${labelCell}</td>`+allDates.map(d=>{
+          if(!dates.includes(d)) return `<td class="na">—</td>`;
+          const n = counts[d]||0;
+          if(n>0 && bu) return `<td class="ok"><a href="${bu}" target="_blank" rel="noopener" class="booklink">${n}室 ↗</a></td>`;
+          return `<td class="${n>0?'ok':'bad'}">${n>0?n+'室':'×'}</td>`;
+        }).join('')+'</tr>';
+        if((e.plan_label||'').includes('3連泊') && dates.some(d=>(counts[d]||0)>0)) banner=true;
+      });
+      html += '</table></div>';
+    });
+    box.innerHTML = html;
+    $("#banner").style.display = banner ? "block" : "none";
+  } else {
+    box.innerHTML = '<span class="muted">未取得</span>';
+    $("#banner").style.display = "none";
+  }
+
+  // 集約ステータス行(報告用)
+  const sys = st.system||{};
+  const next = st.next_check_in!=null ? st.next_check_in+"秒後" : "—";
+  $("#statusline").innerHTML = [
+    on ? '<b style="color:var(--ok)">🟢 稼働中</b>' : '<b style="color:var(--bad)">🔴 停止中</b>',
+    st.burst_active ? '<b style="color:var(--warn)">🔥 バースト中</b>' : '',
+    `最終確認 <b>${st.last_checked_at||'—'}</b>`,
+    `次回 ${next}`,
+    `間隔 ${st.interval}秒`,
+    `チェック ${st.check_count}回`,
+    `通知先 ${st.notify_chat_count||0}件`,
+    `メモリ ${sys.memory_mb??'—'}MB`,
+    st.last_error ? `<span style="color:var(--bad)">⚠ ${st.last_error}</span>` : ''
+  ].filter(Boolean).map(x=>`<span>${x}</span>`).join('');
+
+  const hist = st.history||[];
+  $("#history").innerHTML = hist.length ? hist.slice().reverse().map(h=>{
+    const rl = h.room_label ? h.room_label+' ' : '';
+    const pl = h.plan_label ? `[${h.plan_label}] ` : '';
+    const label = h.type==="available" ? `🎉 ${rl}${pl}${h.date} 空室（${h.aki_num||0}室）` : `😢 ${rl}${pl}${h.date} 満室`;
+    return `<div><span class="muted">${h.at}</span> ${label}</div>`;
+  }).join("") : '<span class="muted">まだありません</span>';
+}
+
+function renderLogs(){
+  const filter = $("#logfilter").value.trim();
+  const box = $("#logbox");
+  const shown = allLogs.filter(l => (curSrc==="all"||l.source===curSrc) && (!filter||l.msg.includes(filter)));
+  box.innerHTML = shown.slice(-800).map(l =>
+    `<div class="line ${l.level}"><span class="ts">${l.ts}</span> [${l.source}] ${escapeHtml(l.msg)}</div>`).join("");
+  if($("#autoscroll").checked) box.scrollTop = box.scrollHeight;
+}
+function escapeHtml(s){ return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+// ---- ライブ更新(SSE) ----
+function connect(){
+  const es = new EventSource("/api/stream");
+  es.onmessage = e => {
+    const d = JSON.parse(e.data);
+    renderStatus(d.status);
+    if(d.logs && d.logs.length){ allLogs.push(...d.logs); if(allLogs.length>2000) allLogs=allLogs.slice(-2000); renderLogs(); }
+  };
+  es.onerror = () => { es.close(); setTimeout(connect, 3000); };
+}
+
+// ---- 操作 ----
+async function post(url, body){ const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})}); return r.json(); }
+$("#btnStart").onclick = ()=> post("/api/control/start",{interval:+$("#interval").value}).then(()=>toast("監視を開始しました"));
+$("#btnStop").onclick = ()=> post("/api/control/stop").then(()=>toast("監視を停止しました"));
+$("#btnCheck").onclick = ()=> { toast("チェック中..."); post("/api/control/check").then(()=>toast("チェック完了")); };
+$("#btnTest").onclick = ()=> post("/api/control/test-notify").then(r=>{
+  if(r.ok) toast("テスト通知を送信しました（"+r.sent+"件）");
+  else if(r.reason==="no_chat") toast("通知先が未登録です。TelegramでBotに /start してください");
+  else toast("テスト通知に失敗しました");
+});
+$("#btnInterval").onclick = ()=> post("/api/control/interval",{interval:+$("#interval").value}).then(r=>{
+  if(r.ok){ $("#interval").value=r.interval; toast(`間隔を ${r.interval}秒 に変更（次サイクルから反映／範囲 ${r.min}〜${r.max}秒）`); }
+});
+
+document.querySelectorAll(".tab").forEach(t=> t.onclick = ()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  t.classList.add("active"); curSrc = t.dataset.src; renderLogs();
+});
+$("#logfilter").oninput = renderLogs;
+
+// ---- 設定 ----
+function setByPath(obj,path,val){ const ks=path.split("."); let o=obj; for(let i=0;i<ks.length-1;i++){ o[ks[i]]=o[ks[i]]||{}; o=o[ks[i]]; } o[ks[ks.length-1]]=val; }
+function getByPath(obj,path){ return path.split(".").reduce((o,k)=>o&&o[k]!=null?o[k]:undefined,obj); }
+
+async function loadSettings(){
+  const s = await (await fetch("/api/settings")).json();
+  document.querySelectorAll("[data-k]").forEach(el=>{
+    let v = getByPath(s, el.dataset.k);
+    if(v===undefined) return;
+    if(el.dataset.list) v = Array.isArray(v)?v.join(","):v;
+    else if(el.dataset.json) v = JSON.stringify(v||{});
+    else if(el.dataset.bool) v = String(v);
+    if(el.dataset.k==="telegram.bot_token"){ el.placeholder=v; return; } // マスク済み。触らない限り送らない
+    el.value = v;
+  });
+  $("#interval").value = getByPath(s,"monitor.interval_seconds")||300;
+}
+
+async function saveSettings(){
+  const patch = {};
+  document.querySelectorAll("[data-k]").forEach(el=>{
+    let v = el.value;
+    if(el.dataset.k==="telegram.bot_token" && !v.trim()) return; // 空なら送らない
+    if(el.dataset.list) v = v.split(",").map(x=>x.trim()).filter(Boolean);
+    else if(el.dataset.json){ try{ v=JSON.parse(v||"{}"); }catch(e){ toast("JSONが不正: "+el.dataset.k); throw e; } }
+    else if(el.dataset.bool) v = (v==="true");
+    else if(el.type==="number") v = +v;
+    setByPath(patch, el.dataset.k, v);
+  });
+  const r = await post("/api/settings", patch);
+  toast(r.ok?"設定を保存しました":"保存に失敗");
+}
+
+let toastT;
+function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),2500); }
+
+// ---- 空室数の推移グラフ ----
+const CHART_COLORS = ['#4f8cff','#f5a623','#2fbf71','#b57bee','#ff5d6c','#00b8d4','#e0729a','#8bc34a'];
+function fmtT(t){ const d=new Date(t),p=n=>String(n).padStart(2,'0'); return `${d.getMonth()+1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`; }
+function renderChart(data){
+  const el=$("#chart"), leg=$("#legend");
+  const pts=(data.points||[]).map(p=>({t:new Date(p.ts).getTime(),p})).filter(x=>!isNaN(x.t)).sort((a,b)=>a.t-b.t);
+  const series=data.series||[];
+  if(pts.length<1||!series.length){ el.innerHTML='<span class="muted">データがありません（監視すると蓄積されます）</span>'; leg.innerHTML=''; return; }
+  const W=800,H=300,pad={l:44,r:16,t:14,b:46};
+  const iw=W-pad.l-pad.r, ih=H-pad.t-pad.b;
+  const t0=pts[0].t, t1=Math.max(pts[pts.length-1].t, t0+1), span=Math.max(1,t1-t0), ymax=Math.max(1,data.ymax||1);
+  const X=t=>pad.l+(t-t0)/span*iw, Y=v=>pad.t+(1-v/ymax)*ih;
+  let s=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="空室数の推移">`;
+  for(let v=0;v<=ymax;v++){ const y=Y(v); s+=`<line class="grid" x1="${pad.l}" y1="${y}" x2="${W-pad.r}" y2="${y}"/><text x="${pad.l-6}" y="${y+4}" text-anchor="end">${v}</text>`; }
+  const nT=Math.min(5,Math.max(2,pts.length));
+  for(let i=0;i<nT;i++){ const t=t0+span*i/(nT-1); const x=X(t); s+=`<line class="grid" x1="${x}" y1="${pad.t}" x2="${x}" y2="${H-pad.b}"/><text x="${x}" y="${H-pad.b+16}" text-anchor="middle">${fmtT(t)}</text>`; }
+  s+=`<line class="axis" x1="${pad.l}" y1="${H-pad.b}" x2="${W-pad.r}" y2="${H-pad.b}"/><line class="axis" x1="${pad.l}" y1="${pad.t}" x2="${pad.l}" y2="${H-pad.b}"/>`;
+  series.forEach((se,i)=>{
+    const col=CHART_COLORS[i%CHART_COLORS.length]; let path='',started=false;
+    pts.forEach(({t,p})=>{ const v=p[se.key]; if(v==null)return; const x=X(t),y=Y(v); if(!started){path=`M ${x} ${y}`;started=true;}else{path+=` H ${x} V ${y}`;} });
+    if(started){ path+=` H ${X(t1)}`; s+=`<path d="${path}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" opacity="0.9"/>`; }
+  });
+  s+='</svg>'; el.innerHTML=s;
+  leg.innerHTML=series.map((se,i)=>`<span><i style="background:${CHART_COLORS[i%CHART_COLORS.length]}"></i>${se.label}</span>`).join('');
+  if(data.stats&&data.stats.first_ts) $("#chartStats").textContent=`（記録 ${data.stats.sample_rows}点 / ${fmtT(new Date(data.stats.first_ts).getTime())} 〜）`;
+}
+function renderSessions(sessions){
+  const el=$("#sessions");
+  if(!sessions||!sessions.length){ el.innerHTML='<span class="muted">まだありません</span>'; return; }
+  el.innerHTML=sessions.map(s=>{
+    const a=(s.started_at||'?').replace('T',' ');
+    const dur=s.stopped_at? fmtDur(Math.round((new Date(s.stopped_at)-new Date(s.started_at))/1000)) : '稼働中';
+    const end=s.stopped_at? s.stopped_at.replace('T',' ').split(' ')[1] : '<span style="color:var(--ok)">稼働中</span>';
+    return `<div><span class="muted">${a}</span> 〜 ${end} <span class="muted">(${dur})</span></div>`;
+  }).join('');
+}
+function loadHistory(){ fetch("/api/history").then(r=>r.json()).then(renderChart).catch(()=>{}); }
+function loadSessions(){ fetch("/api/sessions").then(r=>r.json()).then(d=>renderSessions(d.sessions)).catch(()=>{}); }
+
+// ---- init ----
+loadSettings();
+fetch("/api/logs?after=0").then(r=>r.json()).then(d=>{ allLogs=d.logs; renderLogs(); });
+fetch("/api/status").then(r=>r.json()).then(renderStatus);
+loadHistory(); loadSessions();
+setInterval(()=>{ loadHistory(); loadSessions(); }, 30000);
+connect();
+</script>
+</body>
+</html>

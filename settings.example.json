@@ -1,0 +1,43 @@
+{
+  "_comment": "このファイルを settings.local.json にコピーし、値を埋めてください。サイトURL・施設ID・部屋/プランは別途共有される実値を入れます。settings.local.json は gitignore 済み(共有されません)。",
+  "telegram": {
+    "bot_token": "BotFatherで取得したトークン (または環境変数 TELEGRAM_BOT_TOKEN)",
+    "notify_chat_ids": []
+  },
+  "monitor": {
+    "yado_id": "施設ID",
+    "api_ty": "lim,sp",
+    "target_year": "2026",
+    "site": {
+      "api_url": "在庫検索APIのURL",
+      "date_url": "予約カレンダーページのURL",
+      "form_url": "予約入力フォームのURL"
+    },
+    "target_rooms": [
+      { "label": "部屋の表示名", "room_id": "部屋ID" }
+    ],
+    "guest_nums": [2, 3, 4, 5],
+    "plans": [
+      { "id": "プランID", "label": "プランの表示名", "dates": ["11/6"], "nights": 1 }
+    ],
+    "menu_url": "メニューページのURL",
+    "interval_seconds": 100,
+    "interval_min": 30,
+    "interval_max": 3600,
+    "auto_start": false,
+    "burst": { "enabled": false, "start": "", "end": "", "interval_seconds": 20 }
+  },
+  "reservation": {
+    "enabled": false,
+    "auto_book_room_ids": [],
+    "auto_book_plan_ids": [],
+    "max_windows": 3,
+    "proceed_to_confirm": true,
+    "checkin_time": "15:00",
+    "adults_male": 2,
+    "adults_female": 0,
+    "guest": { "name": "", "kana": "", "tel": "", "post1": "", "post2": "", "pref": "", "address": "", "email": "" },
+    "payment_method": "現地決済",
+    "headless": false
+  }
+}
