@@ -50,6 +50,9 @@
   table.matrix td.ok { color:var(--ok); font-weight:800; background:rgba(47,191,113,.12); }
   table.matrix td.bad { color:var(--bad); font-weight:800; background:rgba(255,93,108,.05); }
   table.matrix td.na { color:var(--muted); font-weight:400; opacity:.4; }
+  /* 連泊の滞在に含まれる日(チェックイン日の結果と同色の帯で「←」を出す) */
+  table.matrix td.spanok { color:var(--ok); background:rgba(47,191,113,.12); font-weight:400; opacity:.75; }
+  table.matrix td.spanbad { color:var(--bad); background:rgba(255,93,108,.05); font-weight:400; opacity:.55; }
   table.matrix td.ok:hover { background:rgba(47,191,113,.22); }
   .booklink { color:var(--ok); font-weight:800; text-decoration:none; white-space:nowrap; }
   .booklink:hover { text-decoration:underline; }
@@ -382,7 +385,7 @@ function renderStatus(st){
     targets.forEach(e=>{ (byRoom[e.room_label] = byRoom[e.room_label]||[]).push(e); });
     // 日付列は全部屋で共通にする(部屋ごとに表を分けても列がそろうように)
     const allDates=[...new Set(targets.flatMap(e=>e.dates||[]))].sort(dcmp);
-    let html='', banner=false;
+    let html='', banner=false, usedSpan=false, usedNa=false;
     Object.keys(byRoom)
       .sort((a,b)=>(notifySet.size&&isNotified(byRoom[a])?0:1)-(notifySet.size&&isNotified(byRoom[b])?0:1))
       .forEach(room=>{
@@ -395,12 +398,13 @@ function renderStatus(st){
         const dates=e.dates||[], counts=e.counts||{}, bu=safeUrl(e.book_url);
         const nights=+e.nights||1;
         const labelCell = bu ? `<a href="${bu}" target="_blank" rel="noopener" class="planlink">${escapeHtml(e.plan_label)}</a>` : escapeHtml(e.plan_label);
-        // 連泊プランはチェックイン日のセルを滞在日数ぶん結合して表示する。
-        // 「—」は本当に「そのプランに無い日」だけになる(滞在に含まれる日と区別)
+        // 結果はチェックイン日の列に出し、連泊の滞在に含まれる残りの日は
+        // 同色の帯+「←」でつなぐ(結果が日付とずれた位置に見えないように)。
+        // 「—」は本当に「そのプランに無い日」だけ
         let cells='';
         for(let i=0;i<allDates.length;){
           const d=allDates[i];
-          if(!dates.includes(d)){ cells+=`<td class="na" title="このプランには無い日">—</td>`; i++; continue; }
+          if(!dates.includes(d)){ cells+=`<td class="na" title="このプランには無い日">—</td>`; usedNa=true; i++; continue; }
           let span=1;
           const [m0,d0]=d.split('/').map(Number);
           for(let k=1;k<nights && i+k<allDates.length;k++){
@@ -411,14 +415,17 @@ function renderStatus(st){
           }
           const n = counts[d]||0;
           const stay = nights>1 ? `${d}チェックイン・${nights}泊` : d;
-          const label = n>0 ? `${n}室` : '×';
           if(n>0 && bu){
-            cells += `<td class="ok" colspan="${span}">`
+            cells += `<td class="ok">`
               + `<a href="#" class="bookopen" data-room="${escapeHtml(e.room_id)}" data-plan="${escapeHtml(e.plan_id)}" data-date="${escapeHtml(d)}"`
-              + ` title="${escapeHtml(stay)}｜予約フォームを自動入力して確認画面まで進める（予約の確定はしません）">${label}</a>`
+              + ` title="${escapeHtml(stay)}｜予約フォームを自動入力して確認画面まで進める（予約の確定はしません）">${n}室</a>`
               + ` <a href="${bu}" target="_blank" rel="noopener" class="booklink" title="予約カレンダーを開くだけ">↗</a></td>`;
           } else {
-            cells += `<td class="${n>0?'ok':'bad'}" colspan="${span}" title="${escapeHtml(stay)}">${label}</td>`;
+            cells += `<td class="${n>0?'ok':'bad'}" title="${escapeHtml(stay)}">${n>0?n+'室':'×'}</td>`;
+          }
+          for(let k=1;k<span;k++){
+            cells += `<td class="${n>0?'spanok':'spanbad'}" title="${escapeHtml(d)}チェックインの予約に含まれる日">←</td>`;
+            usedSpan=true;
           }
           i+=span;
         }
@@ -428,6 +435,11 @@ function renderStatus(st){
       });
       html += '</table></div>';
     });
+    if(usedSpan || usedNa){
+      html += '<div class="note" style="margin-top:-6px;">'
+        + (usedSpan ? '「←」…左のチェックイン日の予約に含まれる日　' : '')
+        + (usedNa ? '「—」…そのプランに無い日' : '') + '</div>';
+    }
     box.innerHTML = html;
     $("#banner").style.display = banner ? "block" : "none";
   } else {
