@@ -3,6 +3,10 @@
 年ごとに変わる監視設定・Telegram設定・(将来の)予約設定をまとめて
 `settings.local.json` に保存する。このファイルは .gitignore 済み
 (Telegramトークンや個人情報を含むため)。ファイルが無ければ既定値で自動生成する。
+
+サイトURL・施設ID・部屋/プランなどの実値は「共有設定ファイル」
+(settings.share.yaml / .yml / .json。リポジトリには含めず別途配布)から取り込む。
+exeと同じフォルダに置けば起動時に自動で取り込まれ、GUIからも読み込める。
 """
 from __future__ import annotations
 
@@ -12,6 +16,8 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 # exe化(PyInstaller等のfrozen)時は、設定・DB・ログをexeと同じフォルダに置く
 # (__file__ は一時展開先を指すため使えない)
@@ -42,8 +48,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
             "date_url": "",   # 予約カレンダーページ
             "form_url": "",   # 予約入力フォーム
         },
-        # 監視する部屋 [{label, room_id}]。settings.local.json で設定
+        # 走査はAPI応答に含まれる全部屋が対象(部屋名も応答から自動取得)。
+        # scan_room_ids に room_id を列挙した場合だけ、その部屋に限定する
+        "scan_room_ids": [],
+        # Telegram通知する部屋(room_id)。空 = 走査した全部屋を通知
+        "notify_room_ids": [],
+        # 部屋の表示名の上書き [{label, room_id}](任意)。旧設定との互換も兼ねる
         "target_rooms": [],
+        # 走査で発見した部屋 [{room_id, label}]。アプリが自動更新する(GUIの選択肢用)
+        "known_rooms": [],
         # 検索する人数(2〜5名)。人数ごとに別々に検索する
         "guest_nums": [2, 3, 4, 5],
         # 監視プラン [{id, label, dates, nights}]。settings.local.json で設定
@@ -98,6 +111,41 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 # GUIに出さない/マスクする秘密キー(パス表記)
 SECRET_PATHS = {("telegram", "bot_token")}
 
+# 共有設定ファイルの探索順(BASE_DIR = exeと同じフォルダ)
+SHARE_FILE_NAMES = ("settings.share.yaml", "settings.share.yml", "settings.share.json")
+
+# 走査(監視)開始に最低限必要な項目。ラベルはGUIのチェックリストにそのまま出す
+REQUIRED_FIELDS: list[tuple[str, tuple[str, ...]]] = [
+    ("施設ID", ("monitor", "yado_id")),
+    ("在庫検索APIのURL", ("monitor", "site", "api_url")),
+    ("予約カレンダーのURL", ("monitor", "site", "date_url")),
+    ("予約フォームのURL", ("monitor", "site", "form_url")),
+    ("メニューページのURL", ("monitor", "menu_url")),
+    ("監視プラン", ("monitor", "plans")),
+]
+
+
+def setup_console() -> None:
+    """Windowsコンソールの文字化け対策。
+
+    日本語WindowsのコンソールはCP932のため、UTF-8のログ(日本語・絵文字)が
+    化ける。コードページをUTF-8(65001)にし、stdout/stderrもUTF-8に揃える。
+    (絵文字はフォント次第で□になることはあるが、化けはしない)
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+        ctypes.windll.kernel32.SetConsoleCP(65001)
+    except Exception:  # noqa: BLE001
+        pass
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
+
 
 def _deep_merge(base: dict, override: dict) -> dict:
     """base を override で再帰的に上書きした新しい dict を返す。"""
@@ -110,8 +158,12 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
-def load_settings() -> dict[str, Any]:
-    """設定を読み込む。既定値に保存済みの値をマージして返す。"""
+def load_settings(apply_env: bool = True) -> dict[str, Any]:
+    """設定を読み込む。既定値に保存済みの値をマージして返す。
+
+    apply_env=False は保存経路用: 環境変数のトークンを実行時だけ効かせ、
+    ファイルには書き込まない(誤って永続化しないため)。
+    """
     settings = copy.deepcopy(DEFAULT_SETTINGS)
     if SETTINGS_FILE.exists():
         try:
@@ -120,9 +172,9 @@ def load_settings() -> dict[str, Any]:
         except (json.JSONDecodeError, OSError) as exc:
             # 壊れていても既定値で動けるようにする
             print(f"[config] settings.local.json 読み込み失敗: {exc}")
-    # 環境変数によるトークン上書き(最優先)
+    # 環境変数によるトークン上書き(最優先・実行時のみ)
     env_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    if env_token:
+    if apply_env and env_token:
         settings["telegram"]["bot_token"] = env_token
     return settings
 
@@ -136,7 +188,7 @@ def save_settings(settings: dict[str, Any]) -> None:
 
 def merge_and_save(patch: dict[str, Any]) -> dict[str, Any]:
     """現在の設定に patch をマージして保存し、新しい設定を返す。"""
-    current = load_settings()
+    current = load_settings(apply_env=False)  # 環境変数のトークンはファイルに書かない
     updated = _deep_merge(current, patch)
     save_settings(updated)
     return updated
@@ -151,6 +203,81 @@ def clamp_interval(value: Any, mon: dict) -> int:
     except (TypeError, ValueError):
         v = mn
     return max(mn, min(mx, v))
+
+
+def _get_path(settings: dict, path: tuple[str, ...]) -> Any:
+    node: Any = settings
+    for key in path:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def required_status(settings: dict[str, Any]) -> list[dict[str, Any]]:
+    """必須項目ごとの充足状況 [{label, ok}] を返す(GUIのチェックリスト用)。"""
+    return [{"label": label, "ok": bool(_get_path(settings, path))}
+            for label, path in REQUIRED_FIELDS]
+
+
+def missing_required(settings: dict[str, Any]) -> list[str]:
+    """未設定の必須項目ラベル一覧。空リストなら走査を開始できる。"""
+    return [r["label"] for r in required_status(settings) if not r["ok"]]
+
+
+def _prune_empty(node: Any) -> Any:
+    """空値("" / [] / {} / None)を再帰的に取り除く。
+
+    共有ファイルの空欄(例: bot_token: "")で、利用者が画面から設定済みの値を
+    上書きして消してしまわないため。0 や False は意味があるので残す。
+    """
+    if isinstance(node, dict):
+        pruned = {k: _prune_empty(v) for k, v in node.items()}
+        return {k: v for k, v in pruned.items()
+                if not (v is None or (isinstance(v, (str, list, dict)) and len(v) == 0))}
+    return node
+
+
+def parse_share_text(text: str) -> dict[str, Any]:
+    """共有設定ファイルの中身(YAML/JSON)を辞書にする。不正なら ValueError。
+
+    空欄の項目は「指定なし」とみなして取り込まない(既存設定を消さない)。
+    """
+    try:
+        data = yaml.safe_load(text)  # YAMLはJSONの上位互換なのでどちらの形式も読める
+    except yaml.YAMLError as exc:
+        raise ValueError(f"設定ファイルとして読めません: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("設定ファイルの形式が正しくありません(最上位が辞書ではありません)")
+    known = _prune_empty({k: v for k, v in data.items() if k in DEFAULT_SETTINGS})
+    if not known:
+        raise ValueError("有効な設定が見つかりません(monitor / telegram / reservation がありません)")
+    return known
+
+
+def auto_import_share() -> str | None:
+    """BASE_DIR の共有設定ファイルを、前回取り込み後に更新されていれば取り込む。
+
+    取り込んだファイル名を返す(取り込み不要/失敗は None)。GUIで直した値を
+    毎回上書きしないよう、ファイル名+mtime をマーカーとして設定に記録する。
+    """
+    for name in SHARE_FILE_NAMES:
+        path = BASE_DIR / name
+        if not path.exists():
+            continue
+        mtime = int(path.stat().st_mtime)
+        mark = load_settings().get("share_import", {})
+        if mark.get("file") == name and mark.get("mtime") == mtime:
+            return None
+        try:
+            data = parse_share_text(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as exc:
+            print(f"[config] {name} の取り込みに失敗: {exc}")
+            return None
+        data["share_import"] = {"file": name, "mtime": mtime}
+        merge_and_save(data)
+        return name
+    return None
 
 
 def masked(settings: dict[str, Any]) -> dict[str, Any]:

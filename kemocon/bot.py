@@ -7,7 +7,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from . import config, store
-from .monitor import controller, setup_logging
+from .monitor import controller, notify_room_ids, setup_logging
 from .state import STATE
 
 log = logging.getLogger("kemocon")
@@ -36,21 +36,39 @@ def _remember_chat(chat_id: int) -> None:
 
 
 def build_status_text() -> str:
-    """/now とダッシュボード共通の状況テキスト(部屋→プラン別)。"""
+    """/now 用の状況テキスト(部屋→プラン別)。
+
+    全部屋走査でも読める長さに保つ: 通知対象(🔔)の部屋を先頭に並べ、
+    Telegramの上限(4096字)に収まらない分は部屋数だけにまとめる。
+    """
     text = "空室状況\n\n"
     if STATE.room_status:
+        want = notify_room_ids(config.load_settings()["monitor"])
         by_room: dict = {}
         for e in STATE.room_status.values():
-            by_room.setdefault(e["room_label"], []).append(e)
-        for room_label, entries in by_room.items():
-            text += f"■ {room_label}\n"
-            for e in entries:
+            by_room.setdefault((e["room_id"], e["room_label"]), []).append(e)
+        keys = sorted(by_room, key=lambda k: 0 if (not want or k[0] in want) else 1)
+        blocks = []
+        for key in keys:
+            rid, room_label = key
+            mark = "🔔 " if want and rid in want else ""
+            block = f"■ {mark}{room_label}\n"
+            for e in by_room[key]:
                 counts = e.get("counts", {})
                 cells = " ".join(
                     f"{d}:{('空' + str(counts.get(d, 0)) + '室') if counts.get(d, 0) > 0 else '×'}"
                     for d in e.get("dates", [])
                 )
-                text += f"  [{e['plan_label']}] {cells}\n"
+                block += f"  [{e['plan_label']}] {cells}\n"
+            blocks.append(block)
+        omitted = 0
+        for block in blocks:
+            if len(text) + len(block) > 3500:
+                omitted += 1
+                continue
+            text += block
+        if omitted:
+            text += f"…ほか{omitted}部屋(ダッシュボードで確認できます)\n"
     else:
         text += "まだ確認していません\n"
     text += f"\n監視: {'稼働中' if STATE.monitoring else '停止中'}"
@@ -72,11 +90,15 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     mon = config.load_settings()["monitor"]
-    rooms = "、".join(r.get("label", "") for r in mon.get("target_rooms", []))
+    scan_ids = [str(x) for x in mon.get("scan_room_ids", [])]
+    known = {str(r.get("room_id")): r.get("label", "") for r in mon.get("known_rooms", [])}
+    want = notify_room_ids(mon)
+    notify = "、".join(known.get(rid) or f"部屋{rid}" for rid in sorted(want)) if want else "全部屋"
     dates = sorted({d for p in mon.get("plans", []) for d in p.get("dates", [])})
     text = (
         f"空室監視\r\n"
-        f"対象部屋：{rooms or '(未設定)'}\r\n"
+        f"走査部屋：{'限定 ' + '、'.join(scan_ids) if scan_ids else '全部屋(自動)'}\r\n"
+        f"通知部屋：{notify}\r\n"
         f"監視対象日：{'、'.join(dates) or '(未設定)'}\r\n"
         f"監視間隔：{mon['interval_seconds']}秒\r\n"
     )
@@ -88,6 +110,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("このコマンドは管理者のみが使用できます。")
         return
     _remember_chat(update.effective_chat.id)
+    missing = config.missing_required(config.load_settings())
+    if missing:
+        await update.message.reply_text(
+            "通知先に登録しました！\n"
+            "ただし設定が未完了のため、まだ監視は始められません。\n"
+            f"ダッシュボードの設定タブで入力してください: {'、'.join(missing)}")
+        return
     started = await controller.start()
     if started:
         await update.message.reply_text(f"監視を開始しました！(間隔 {STATE.interval} 秒)")
@@ -136,6 +165,7 @@ def build_application(settings: dict) -> Application:
 
 def run_bot_only() -> None:
     """ダッシュボードなしでBotだけ起動(去年と同じ挙動)。"""
+    config.setup_console()
     setup_logging()
     store.init_db()
     store.close_dangling_sessions(store.now_iso())  # 前回の開きっぱなしセッションを閉じる

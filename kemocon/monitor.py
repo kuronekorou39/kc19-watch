@@ -1,9 +1,11 @@
 """空室監視のコアロジックと監視コントローラ(部屋×プラン)。
 
-- 複数の対象部屋(target_rooms, room_idで指定) × 複数プラン を監視する。
-- 1プランのAPI応答に全部屋の在庫が含まれるので、部屋を増やしてもAPI回数は増えない。
+- 1プランのAPI応答に全部屋の在庫が含まれるため、応答に出てくる全部屋を走査する
+  (部屋名も応答から自動取得。scan_room_ids を指定した場合だけ限定)。
+- Telegram通知は notify_room_ids の部屋に絞れる(空=全部通知)。履歴・DBには全部残る。
 - プランごとに見るチェックイン日(dates)と泊数(nights)を持つ。3連泊は初日だけ見る。
-- 人数(2〜5)は別々に検索(実測では空室数は人数非依存。差が出たら警告)。
+- 人数(2〜5)は別々に検索し、応答に出た部屋の和集合を取る(収容人数の違いで
+  人数によっては応答に出ない部屋があっても取りこぼさない)。
 
 状態(targets, フラット): key="{room_id}|{plan_id}"
   { key: { room_label, room_id, plan_id, plan_label, dates, nights, book_url,
@@ -31,6 +33,23 @@ http_log = logging.getLogger("kemocon.http")
 _MAX_RESPONSE_LOG_SIZE = 4000
 
 
+# コンソール(conhost)のフォントは絵文字を描画できず豆腐/化けになるため、
+# コンソール出力だけ絵文字を取り除く(ファイル・ダッシュボード・Telegramには残す)
+_EMOJI_RE = re.compile(
+    "[\\U0001F000-\\U0001FFFF"  # 絵文字プレーン(ロケット・書類・虫眼鏡など)
+    "\\u2600-\\u27BF"           # 雑記号・装飾(警告・チェックなど)
+    "\\u2B00-\\u2BFF"           # 矢印・図形
+    "\\u23E9-\\u23FF"           # AV記号(停止・電源など)
+    "\\u25B6\\u25C0"            # 再生マーク(JIS外でフォントが持たないことがある)
+    "\\uFE0F\\u200D]"           # 異体字セレクタ・ZWJ
+)
+
+
+class _ConsoleFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return _EMOJI_RE.sub("", super().format(record)).lstrip()
+
+
 def setup_logging() -> None:
     """ファイル(日付別) + ダッシュボードの両方にログを出す。"""
     log_dir = os.path.join(config.BASE_DIR, "logs")
@@ -44,7 +63,9 @@ def setup_logging() -> None:
         fh = logging.FileHandler(os.path.join(log_dir, f"kemocon_bot_{stamp}.log"), encoding="utf-8")
         fh.setFormatter(fmt)
         log.addHandler(fh)
-        log.addHandler(logging.StreamHandler())
+        sh = logging.StreamHandler()
+        sh.setFormatter(_ConsoleFormatter())
+        log.addHandler(sh)
         log.addHandler(DashboardLogHandler("bot"))
 
     http_log.setLevel(logging.INFO)
@@ -83,11 +104,15 @@ def _plans(mon: dict) -> list[dict]:
     return [{"id": str(p), "label": str(p), "dates": dates} for p in mon.get("plan_ids", ["517"])]
 
 
-def _target_rooms(mon: dict) -> list[dict]:
-    if mon.get("target_rooms"):
-        return mon["target_rooms"]
-    rid = mon.get("booking_room_id")
-    return [{"label": "対象部屋", "room_id": rid}] if rid else []
+def _room_label_overrides(mon: dict) -> dict[str, str]:
+    """表示名の上書き {room_id: label}。旧設定の target_rooms をそのまま使う。"""
+    return {str(r["room_id"]): r["label"]
+            for r in (mon.get("target_rooms") or []) if r.get("room_id") and r.get("label")}
+
+
+def notify_room_ids(mon: dict) -> set[str]:
+    """通知対象の room_id 集合。空集合 = 全部屋を通知。"""
+    return {str(x) for x in (mon.get("notify_room_ids") or [])}
 
 
 def _booking_url(mon: dict, plan_id: str, room_id: str) -> str:
@@ -134,17 +159,22 @@ def _fetch_stock(mon: dict, plan_id: str, guest_num: int) -> str:
     return r.text
 
 
-def _parse_target_rooms(text: str, year: str, dates: list[str], want_ids: set[str]) -> dict[str, dict[str, int]]:
-    """対象room_idの {room_id: {date: aki_num}} を返す(-1=データなし)。"""
-    out: dict[str, dict[str, int]] = {}
+def _parse_rooms(text: str, year: str, dates: list[str],
+                 want_ids: set[str] | None = None) -> dict[str, dict]:
+    """応答に含まれる部屋ごとの {room_id: {"name": 部屋名, "akis": {date: aki_num}}} を返す。
+
+    aki_num の -1 はデータなし。want_ids が空/None なら全部屋を対象にする。
+    """
+    out: dict[str, dict] = {}
     if "rooms" not in text:
         return out
     parts = re.split(r'"room_id":\s*[\'"]?(\d+)', text)  # [pre, id, block, id, block, ...]
     for i in range(1, len(parts), 2):
         rid = parts[i]
-        if rid not in want_ids:
+        if want_ids and rid not in want_ids:
             continue
         block = parts[i + 1] if i + 1 < len(parts) else ""
+        name_match = re.search(r'"room_name"\s*:\s*[\'"]([^\'"]*)[\'"]', block)
         aki_match = re.search(r'"aki"\s*:\s*\[(.*?)\]', block, re.DOTALL)
         ds = {d: -1 for d in dates}
         if aki_match:
@@ -153,48 +183,48 @@ def _parse_target_rooms(text: str, year: str, dates: list[str], want_ids: set[st
                 m = re.search(rf'"aki_date"\s*:\s*[\'"]{year}/{d}[\'"][^{{]*?"aki_num"\s*:\s*[\'"](\d+)[\'"]', sec)
                 if m:
                     ds[d] = int(m.group(1))
-        out[rid] = ds
+        out[rid] = {"name": name_match.group(1).strip() if name_match else "", "akis": ds}
     return out
 
 
 def check_availability(mon: dict[str, Any]) -> dict[str, dict]:
-    """部屋×プランを検索して targets(フラット) を返す。"""
+    """プラン×人数で検索し、応答に出た全部屋(または scan_room_ids の部屋)の
+    targets(フラット) を返す。部屋は応答から自動発見する。"""
     year = mon["target_year"]
     guest_nums = [int(g) for g in (mon.get("guest_nums") or [2, 3, 4, 5])]
     plans = _plans(mon)
-    rooms = _target_rooms(mon)
-    want_ids = {str(r["room_id"]) for r in rooms}
+    scan_ids = {str(x) for x in (mon.get("scan_room_ids") or [])}
+    overrides = _room_label_overrides(mon)
 
     targets: dict[str, dict] = {}
-    for r in rooms:
-        for pl in plans:
-            key = f'{r["room_id"]}|{pl["id"]}'
-            targets[key] = {
-                "room_label": r["label"], "room_id": str(r["room_id"]),
-                "plan_id": str(pl["id"]), "plan_label": pl.get("label", str(pl["id"])),
-                "dates": pl["dates"], "nights": pl.get("nights"),
-                "book_url": _booking_url(mon, pl["id"], r["room_id"]),
-                "matrix": {}, "counts": {d: 0 for d in pl["dates"]},
-            }
-
-    log.info("🔎 検索: 部屋%d × プラン%s × 人数%s",
-             len(rooms), [p["id"] for p in plans], guest_nums)
+    log.info("🔎 検索: 部屋%s × プラン%s × 人数%s",
+             "限定" + str(sorted(scan_ids)) if scan_ids else "=全部屋",
+             [p["id"] for p in plans], guest_nums)
     for pl in plans:
         for gn in guest_nums:
             text = _fetch_stock(mon, pl["id"], gn)
-            per_room = _parse_target_rooms(text, year, pl["dates"], want_ids)
-            for r in rooms:
-                key = f'{r["room_id"]}|{pl["id"]}'
-                akis = per_room.get(str(r["room_id"]), {})
-                e = targets[key]
+            per_room = _parse_rooms(text, year, pl["dates"], scan_ids)
+            for rid, info in per_room.items():
+                key = f'{rid}|{pl["id"]}'
+                e = targets.get(key)
+                if e is None:
+                    e = targets[key] = {
+                        "room_label": overrides.get(rid) or info["name"] or f"部屋{rid}",
+                        "room_id": rid,
+                        "plan_id": str(pl["id"]), "plan_label": pl.get("label", str(pl["id"])),
+                        "dates": pl["dates"], "nights": pl.get("nights"),
+                        "book_url": _booking_url(mon, pl["id"], rid),
+                        "matrix": {}, "counts": {d: 0 for d in pl["dates"]},
+                    }
                 gg = e["matrix"].setdefault(str(gn), {d: False for d in pl["dates"]})
                 for d in pl["dates"]:
-                    n = akis.get(d, -1)
+                    n = info["akis"].get(d, -1)
                     if n > 0:
                         gg[d] = True
                     if n > e["counts"][d]:
                         e["counts"][d] = n
-    log.info("📊 対象 %d 件を取得", len(targets))
+    room_count = len({e["room_id"] for e in targets.values()})
+    log.info("📊 %d部屋 / %d件(部屋×プラン)を取得", room_count, len(targets))
     return targets
 
 
@@ -285,6 +315,10 @@ class MonitorController:
     async def start(self, interval: int | None = None) -> bool:
         if STATE.monitoring:
             return False
+        missing = config.missing_required(config.load_settings())
+        if missing:
+            log.warning("走査を開始できません。必須項目が未設定: %s", "、".join(missing))
+            return False
         if interval:
             STATE.interval = config.clamp_interval(interval, config.load_settings()["monitor"])
         STATE.monitoring = True
@@ -343,6 +377,7 @@ class MonitorController:
             STATE.last_checked_ts = time.time()
             STATE.last_checked_at = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
             STATE.last_error = None
+            self._update_known_rooms(targets)
 
             # 永続化(部屋×プラン×日付, 変化時のみ)
             counts_snap = {k: e["counts"] for k, e in targets.items()}
@@ -369,16 +404,27 @@ class MonitorController:
             STATE.last_error = str(exc)
             log.error("チェック中エラー: %s", exc)
 
+    def _update_known_rooms(self, targets: dict) -> None:
+        """走査で発見した部屋一覧を設定に保存する(GUIの通知対象チェックボックス用)。"""
+        seen: dict[str, str] = {}
+        for e in targets.values():
+            seen.setdefault(e["room_id"], e["room_label"])
+        rooms = [{"room_id": rid, "label": seen[rid]}
+                 for rid in sorted(seen, key=lambda x: int(x) if x.isdigit() else 10**9)]
+        if config.load_settings().get("monitor", {}).get("known_rooms") != rooms:
+            config.merge_and_save({"monitor": {"known_rooms": rooms}})
+
     async def _maybe_autobook(self, events: list[dict], settings: dict) -> None:
         """空室検知時に予約フォームを自動で開いて入力し、人に渡す(handoff)。"""
         res = settings["reservation"]
         if not res.get("enabled"):
             return
         mon = settings["monitor"]
-        room_filter = {str(x) for x in (res.get("auto_book_room_ids") or [])}
+        # 対象部屋の無指定時は通知対象に合わせる(全部屋走査で無関係な部屋の窓を開かないため)
+        room_filter = ({str(x) for x in (res.get("auto_book_room_ids") or [])}
+                       or notify_room_ids(mon))
         plan_filter = {str(x) for x in (res.get("auto_book_plan_ids") or [])}
         max_windows = int(res.get("max_windows", 4))
-        loop = asyncio.get_running_loop()
         opened = 0
         for e in [ev for ev in events if ev["type"] == "available"]:
             if opened >= max_windows:
@@ -394,11 +440,11 @@ class MonitorController:
             month, day = (int(x) for x in e["date"].split("/"))
             log.info("🧾 予約フォーム自動起動: %s [%s] %s", e["room_label"], e["plan_label"], e["date"])
             try:
-                rep = await loop.run_in_executor(None, lambda ev=e: booking.prepare_booking(
-                    mon, res, ev["plan_id"], ev["room_id"], day, year=mon["target_year"],
-                    month=month, nights=ev.get("nights"),
+                rep = await booking.prepare_booking_async(
+                    mon, res, e["plan_id"], e["room_id"], day, year=mon["target_year"],
+                    month=month, nights=e.get("nights"),
                     headless=res.get("headless", False), keep_open=True,
-                    proceed_to_confirm=res.get("proceed_to_confirm", True)))
+                    proceed_to_confirm=res.get("proceed_to_confirm", True))
             except Exception as exc:  # noqa: BLE001
                 log.error("予約フォーム起動失敗: %s", exc)
                 continue
@@ -416,6 +462,15 @@ class MonitorController:
                 log.error("Telegram送信失敗 chat_id=%s: %s", chat_id, exc)
 
     async def _notify(self, events: list[dict], settings: dict) -> None:
+        # 通知対象の部屋だけTelegramに送る(履歴・DBには全イベントが残っている)
+        want = notify_room_ids(settings["monitor"])
+        if want:
+            skipped = sum(1 for e in events if e["room_id"] not in want)
+            events = [e for e in events if e["room_id"] in want]
+            if skipped:
+                log.info("🔕 通知対象外の部屋の変化 %d件(履歴のみ記録)", skipped)
+            if not events:
+                return
         messages = build_messages(events)
         chat_ids = settings["telegram"]["notify_chat_ids"]
         for msg in messages:

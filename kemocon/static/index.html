@@ -49,16 +49,21 @@
   .date.ok { border-color:var(--ok); background:rgba(47,191,113,.10); }
   .date.ok .s { color:var(--ok); }
   .date.bad .s { color:var(--bad); }
-  table.matrix { width:100%; border-collapse:collapse; margin-top:4px; }
+  /* 列幅を固定し、どの部屋の表も同じ列割りにする(空室表示「N室↗」で列がずれないように) */
+  table.matrix { width:100%; border-collapse:collapse; margin-top:4px; table-layout:fixed; }
   table.matrix th, table.matrix td { border:1px solid var(--border); padding:9px 6px; text-align:center; font-size:16px; }
   table.matrix th { color:var(--muted); font-weight:600; font-size:12px; }
-  table.matrix td.rowh { color:var(--text); font-size:13px; font-weight:600; text-align:left; padding-left:10px; white-space:nowrap; }
+  table.matrix th.planh { text-align:left; width:36%; }
+  table.matrix td.rowh { color:var(--text); font-size:13px; font-weight:600; text-align:left; padding-left:10px; overflow-wrap:anywhere; }
   table.matrix td.ok { color:var(--ok); font-weight:800; background:rgba(47,191,113,.12); }
-  table.matrix td.bad { color:var(--bad); font-weight:800; }
-  table.matrix td.na { color:var(--muted); font-weight:400; }
+  table.matrix td.bad { color:var(--bad); font-weight:800; background:rgba(255,93,108,.05); }
+  table.matrix td.na { color:var(--muted); font-weight:400; opacity:.4; }
   table.matrix td.ok:hover { background:rgba(47,191,113,.22); }
   .booklink { color:var(--ok); font-weight:800; text-decoration:none; white-space:nowrap; }
   .booklink:hover { text-decoration:underline; }
+  /* 空室セル: 「N室」クリック=予約フォーム自動入力(handoff) ／ 「↗」=カレンダーを開くだけ */
+  .bookopen { color:var(--ok); font-weight:800; text-decoration:none; border-bottom:2px dotted var(--ok); }
+  .bookopen:hover { background:rgba(47,191,113,.25); }
   .planlink { color:inherit; text-decoration:none; border-bottom:1px dotted var(--muted); }
   .planlink:hover { color:var(--accent); border-color:var(--accent); }
   .summary { margin-bottom:16px; }
@@ -87,7 +92,8 @@
     border-bottom:none; font-size:13px; }
   .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
   #logbox { background:#0b0d11; color:#cdd3dc; font-family:ui-monospace,"Cascadia Code",Consolas,monospace;
-    font-size:12.5px; height:320px; overflow:auto; padding:12px; border-radius:0 8px 8px 8px; border:1px solid var(--border); }
+    font-size:12.5px; height:180px; min-height:100px; overflow:auto; resize:vertical;
+    padding:12px; border-radius:0 8px 8px 8px; border:1px solid var(--border); }
   #logbox .line { white-space:pre-wrap; padding:1px 0; }
   #logbox .ERROR { color:var(--bad); } #logbox .WARNING { color:var(--warn); }
   #logbox .ts { color:var(--muted); }
@@ -104,33 +110,70 @@
     padding:12px 18px; border-radius:10px; box-shadow:var(--shadow); opacity:0; transition:.3s; }
   .toast.show { opacity:1; }
   a { color:var(--accent); }
+  /* ページタブ(走査/設定) */
+  .pagenav { display:flex; gap:4px; background:var(--panel2); border:1px solid var(--border);
+    border-radius:999px; padding:3px; }
+  .pagenav button { padding:6px 26px; border-radius:999px; font-size:14px; background:transparent;
+    border:none; color:var(--muted); }
+  .pagenav button.active { background:var(--accent); color:#fff; }
+  .page { display:none; }
+  .page.active { display:block; }
+  /* 設定タブのセクション */
+  .sect { margin-bottom:18px; }
+  .sect h2 { display:flex; align-items:center; gap:10px; font-size:15px; text-transform:none;
+    letter-spacing:0; color:var(--text); }
+  .badge { font-size:11px; padding:3px 12px; border-radius:999px; font-weight:700; }
+  .badge.req { background:rgba(255,93,108,.15); color:var(--bad); }
+  .badge.tg  { background:rgba(79,140,255,.15); color:var(--accent); }
+  .badge.opt { background:rgba(154,164,178,.18); color:var(--muted); }
+  .reqlist { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0; }
+  .chip { font-size:12px; padding:4px 12px; border-radius:999px; border:1px solid var(--border);
+    background:var(--panel2); }
+  .chip.ok { color:var(--ok); border-color:rgba(47,191,113,.4); }
+  .chip.bad { color:var(--bad); border-color:rgba(255,93,108,.5); font-weight:700; }
+  .startnote { display:none; margin:0 0 14px; padding:10px 14px; border-radius:8px; font-size:13px;
+    background:rgba(245,183,79,.12); color:var(--warn); border:1px solid rgba(245,183,79,.35); }
+  details.adv { margin:12px 0; border:1px dashed var(--border); border-radius:8px; padding:6px 12px; }
+  details.adv summary { cursor:pointer; font-size:13px; color:var(--muted); }
+  /* 設定タブ: 必須と通知を横並びにしてスクロールを減らす */
+  .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
+  @media (max-width:900px){ .settings-grid { grid-template-columns:1fr; } }
+  details.sect > summary { cursor:pointer; font-weight:700; font-size:15px; display:flex;
+    align-items:center; gap:10px; }
+  details.sect[open] > summary { margin-bottom:10px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>🏨 空室監視ダッシュボード</h1>
+  <h1>🏨 空室監視</h1>
+  <nav class="pagenav">
+    <button class="active" data-page="scan">走査</button>
+    <button data-page="settings">設定</button>
+  </nav>
   <span id="pill" class="pill off">停止中</span>
   <span class="spacer"></span>
   <span class="muted" id="uptime">稼働 --</span>
+  <button id="btnQuit" class="danger" style="padding:5px 14px;font-size:12.5px;">⏻ 終了</button>
 </header>
 
 <main>
+<div id="page-scan" class="page active">
   <!-- 報告用サマリー(トップに必要データを集約・スクショ用) -->
   <div class="card summary">
     <div class="sum-head">
       <h2>🏨 空室監視</h2>
-      <span class="muted">対象日は下表のとおり</span>
+      <a id="menuLink" target="_blank" rel="noopener" style="display:none;font-size:13px;">🔗 予約サイトを開く ↗</a>
     </div>
     <div id="matrix"><span class="muted">未取得</span></div>
     <div class="banner" id="banner">🔥 3連泊のチェックイン日が空きました！予約可能です</div>
     <div class="statusline" id="statusline"></div>
   </div>
 
+  <div class="startnote" id="startNote"></div>
   <div class="controls">
-    <button id="btnStart" class="primary">▶ 監視開始</button>
+    <button id="btnStart" class="primary">▶ 走査開始</button>
     <button id="btnStop" class="danger">⏹ 停止</button>
     <button id="btnCheck">🔄 今すぐチェック</button>
-    <button id="btnTest">🔔 テスト通知</button>
     <span class="muted">間隔</span>
     <input type="number" id="interval" min="30" step="10" value="90"> <span class="muted">秒</span>
     <button id="btnInterval">↻ 間隔を適用</button>
@@ -164,31 +207,74 @@
     </div>
     <div id="logbox"></div>
   </section>
+</div><!-- /page-scan -->
 
-  <details class="settings">
-    <summary>⚙️ 監視設定</summary>
-    <div class="form-grid" id="monForm">
-      <div class="field"><label>施設ID (id)</label><input data-k="monitor.yado_id"></div>
-      <div class="field"><label>検索人数 (カンマ区切り)</label><input data-k="monitor.guest_nums" data-list="1"></div>
-      <div class="field"><label>ty</label><input data-k="monitor.api_ty"></div>
-      <div class="field"><label>対象年</label><input data-k="monitor.target_year"></div>
-      <div class="field" style="grid-column:1/-1;"><label>監視する部屋 (JSON: [{"label","room_id"}])</label><textarea data-k="monitor.target_rooms" data-json="1" rows="3"></textarea></div>
-      <div class="field" style="grid-column:1/-1;"><label>プラン設定 (JSON: [{"id","label","dates":[...],"nights":N}] ／ 3連泊は初日だけ, 1泊は各日)</label><textarea data-k="monitor.plans" data-json="1" rows="4"></textarea></div>
-      <div class="field"><label>監視間隔(秒)</label><input type="number" data-k="monitor.interval_seconds"></div>
-      <div class="field"><label>起動時に自動開始</label><select data-k="monitor.auto_start" data-bool="1"><option value="false">しない</option><option value="true">する</option></select></div>
-      <div class="field"><label>解禁バースト（時間帯だけ間隔を狭める）</label><select data-k="monitor.burst.enabled" data-bool="1"><option value="false">無効</option><option value="true">有効</option></select></div>
-      <div class="field"><label>バースト間隔(秒)</label><input type="number" data-k="monitor.burst.interval_seconds"></div>
-      <div class="field"><label>バースト開始</label><input data-k="monitor.burst.start" placeholder="2026-08-04 19:50"></div>
-      <div class="field"><label>バースト終了</label><input data-k="monitor.burst.end" placeholder="2026-08-04 20:45"></div>
-      <div class="field" style="grid-column:1/-1;"><label>予約ページURL</label><input data-k="monitor.menu_url"></div>
-      <div class="field" style="grid-column:1/-1;"><label>Telegram Bot Token (変更時のみ入力・保存後はアプリ再起動で反映)</label><input data-k="telegram.bot_token" placeholder="********"></div>
+<div id="page-settings" class="page">
+<div class="settings-grid">
+
+  <div class="card sect">
+    <h2><span class="badge req">必須</span> 監視対象の設定</h2>
+    <p class="note">共有された設定ファイル（settings.share.yaml）を読み込むだけでOK。
+      exe と同じフォルダに置いておけば起動時に自動で読み込まれます。</p>
+    <div class="controls" style="margin-bottom:6px;">
+      <button class="primary" id="btnImport">📄 設定ファイルを読み込む</button>
+      <input type="file" id="shareFile" accept=".yaml,.yml,.json" style="display:none;">
     </div>
-    <button class="primary" onclick="saveSettings()">💾 監視設定を保存</button>
-  </details>
+    <div class="reqlist" id="reqlist"></div>
+    <div class="subhead">走査する部屋</div>
+    <div class="reqlist" id="roomsSummary"><span class="chip ok">全部屋（自動で発見）</span></div>
+    <div class="subhead">監視プラン</div>
+    <div class="reqlist" id="plansSummary"><span class="muted">未設定</span></div>
+    <details class="adv">
+      <summary>手入力・上級者向け（施設ID／URL／部屋・プラン／バースト）</summary>
+      <div class="form-grid">
+        <div class="field"><label>施設ID</label><input data-k="monitor.yado_id"></div>
+        <div class="field" style="grid-column:1/-1;"><label>在庫検索APIのURL</label><input data-k="monitor.site.api_url"></div>
+        <div class="field" style="grid-column:1/-1;"><label>予約カレンダーのURL</label><input data-k="monitor.site.date_url"></div>
+        <div class="field" style="grid-column:1/-1;"><label>予約フォームのURL</label><input data-k="monitor.site.form_url"></div>
+        <div class="field" style="grid-column:1/-1;"><label>メニューページのURL</label><input data-k="monitor.menu_url"></div>
+        <div class="field" style="grid-column:1/-1;"><label>走査を限定する部屋ID (カンマ区切り, 空=全部屋を自動走査)</label><input data-k="monitor.scan_room_ids" data-list="1"></div>
+        <div class="field" style="grid-column:1/-1;"><label>プラン設定 (JSON: [{"id","label","dates":[...],"nights":N}] ／ 3連泊は初日だけ, 1泊は各日)</label><textarea data-k="monitor.plans" data-json="1" rows="4"></textarea></div>
+        <div class="field"><label>検索人数 (カンマ区切り)</label><input data-k="monitor.guest_nums" data-list="1"></div>
+        <div class="field"><label>ty</label><input data-k="monitor.api_ty"></div>
+        <div class="field"><label>対象年</label><input data-k="monitor.target_year"></div>
+        <div class="field"><label>起動時に自動開始</label><select data-k="monitor.auto_start" data-bool="1"><option value="false">しない</option><option value="true">する</option></select></div>
+        <div class="field"><label>解禁バースト（時間帯だけ間隔を狭める）</label><select data-k="monitor.burst.enabled" data-bool="1"><option value="false">無効</option><option value="true">有効</option></select></div>
+        <div class="field"><label>バースト間隔(秒)</label><input type="number" data-k="monitor.burst.interval_seconds"></div>
+        <div class="field"><label>バースト開始</label><input data-k="monitor.burst.start" placeholder="2026-08-04 19:50"></div>
+        <div class="field"><label>バースト終了</label><input data-k="monitor.burst.end" placeholder="2026-08-04 20:45"></div>
+      </div>
+      <button class="primary" onclick="saveSettings()" style="margin:4px 0 8px;">💾 保存</button>
+    </details>
+  </div>
 
-  <details class="settings">
-    <summary>📝 予約設定（自動予約フォーム入力用）</summary>
-    <p class="note">「有効化」すると、空室検知時に予約フォームを<b>自動で開いて入力し画面を残します</b>（Botは確定しません＝あなたが最後に確認して予約完了）。保存先は gitignore 済みの <code>settings.local.json</code>（手元のみ）。</p>
+  <div class="card sect">
+    <h2><span class="badge tg">通知</span> テレグラム通知</h2>
+    <p class="note">空室が出たときに Telegram へ通知します。未設定でも走査はできますが、通知は届きません。<br>
+      ① Telegram で <b>@BotFather</b> から Bot を作りトークンをコピー →
+      ② 下に貼り付けて「保存して接続」 →
+      ③ 自分の Bot を開いて <b>/start</b> を送ると通知先に登録されます。</p>
+    <div class="form-grid">
+      <div class="field" style="grid-column:1/-1;"><label>Bot Token（変更時のみ入力）</label><input data-k="telegram.bot_token" placeholder="********"></div>
+    </div>
+    <div class="note" style="font-size:13px;">接続状態: <b id="botState">未接続</b> ／ 通知先 <b id="chatCount">0</b> 件</div>
+    <div class="controls" style="margin-top:10px;">
+      <button class="primary" onclick="saveSettings()">💾 保存して接続</button>
+      <button id="btnTest">🔔 テスト通知を送る</button>
+    </div>
+    <div class="subhead">通知する部屋</div>
+    <p class="note">チェックした部屋の空室だけ通知します（<b>チェックなし＝すべての部屋を通知</b>）。
+      走査はどの場合も全部屋が対象で、履歴・グラフには全部屋のデータが残ります。変更は即保存されます。</p>
+    <div class="reqlist" id="notifyRooms"><span class="muted">走査すると部屋の一覧がここに並びます</span></div>
+  </div>
+
+</div><!-- /settings-grid -->
+
+  <details class="card sect">
+    <summary><span class="badge opt">任意</span> ブラウザ操作（予約アシスト）<span class="muted" style="font-weight:400;font-size:13px;">— 使う場合だけ開いて設定</span></summary>
+    <p class="note">「有効化」すると、空室検知時に予約フォームを<b>自動で開いて入力し画面を残します</b>（Botは確定しません＝あなたが最後に確認して予約完了）。PCに Chrome または Edge が入っている必要があります。</p>
+    <p class="note">📁 ここで入力した代表者情報の保存先: <code id="settingsPath" style="word-break:break-all;">settings.local.json</code><br>
+      このPCの中だけに保存されます（外部への送信なし。共有設定ファイルや配布物にも含まれません。使うのは予約フォームへの自動入力の時だけです）。</p>
     <div class="form-grid">
       <div class="field"><label>自動起動を有効化</label><select data-k="reservation.enabled" data-bool="1"><option value="false">無効</option><option value="true">有効</option></select></div>
       <div class="field"><label>対象部屋ID (カンマ区切り, 空=全部)</label><input data-k="reservation.auto_book_room_ids" data-list="1"></div>
@@ -213,15 +299,47 @@
     <div class="form-grid">
       <div class="field"><label>ヘッドレス実行</label><select data-k="reservation.headless" data-bool="1"><option value="true">ヘッドレス</option><option value="false">画面あり</option></select></div>
     </div>
-    <button class="primary" onclick="saveSettings()">💾 予約設定を保存</button>
+    <div class="controls" style="margin-top:4px;">
+      <button class="primary" onclick="saveSettings()">💾 保存</button>
+      <button id="btnTestBooking">🧪 動作テスト（フォームを開いて自動入力）</button>
+    </div>
+    <p class="note">テストは先頭の部屋×プランの予約フォームを実際に開いて入力し、画面を残します。
+      「確認画面へ」には進まず、<b>予約はされません</b>。確認したらブラウザ窓は手で閉じてください。</p>
   </details>
+
+</div><!-- /page-settings -->
 </main>
 
 <div class="toast" id="toast"></div>
 
 <script>
 const $ = s => document.querySelector(s);
-let curSrc = "all", allLogs = [];
+let curSrc = "all", allLogs = [], pageInited = false;
+let MONITORING = false, SHUTDOWN = false;
+
+// ---- アプリの終了(サーバーごと止める) ----
+$("#btnQuit").onclick = async ()=>{
+  const msg = MONITORING
+    ? "アプリを終了しますか？\n走査も停止し、Telegram通知も届かなくなります。"
+    : "アプリを終了しますか？";
+  if(!confirm(msg)) return;
+  SHUTDOWN = true;
+  try{ await post("/api/shutdown"); }catch(e){}
+  document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;'
+    + 'justify-content:center;font-size:17px;">✅ 終了しました。このタブは閉じてください。</div>';
+};
+// 走査中にタブを閉じようとしたら、ブラウザ標準の確認を出す
+// (裏で動かしたままにするならそのまま閉じてOK。サーバーごと止めるのは「⏻ 終了」ボタン)
+window.addEventListener("beforeunload", e=>{
+  if(MONITORING && !SHUTDOWN){ e.preventDefault(); e.returnValue = ""; }
+});
+
+// ---- ページタブ(走査/設定) ----
+function switchPage(name){
+  document.querySelectorAll(".pagenav button").forEach(b=>b.classList.toggle("active", b.dataset.page===name));
+  document.querySelectorAll(".page").forEach(p=>p.classList.toggle("active", p.id==="page-"+name));
+}
+document.querySelectorAll(".pagenav button").forEach(b=> b.onclick = ()=> switchPage(b.dataset.page));
 
 function fmtDur(sec){ if(sec==null) return "--"; const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;
   return (h?h+"h":"")+(m?m+"m":"")+s+"s"; }
@@ -229,35 +347,74 @@ function fmtDur(sec){ if(sec==null) return "--"; const h=Math.floor(sec/3600),m=
 function dcmp(a,b){ const [m1,d1]=a.split('/').map(Number),[m2,d2]=b.split('/').map(Number); return m1-m2||d1-d2; }
 function renderStatus(st){
   const on = st.monitoring;
+  MONITORING = on;
   const pill = $("#pill"); pill.textContent = on?"稼働中":"停止中"; pill.className = "pill "+(on?"on":"off");
   $("#uptime").textContent = "稼働 " + fmtDur(st.uptime_seconds);
-  $("#btnStart").disabled = on; $("#btnStop").disabled = !on;
+
+  // セットアップ状況: 必須が揃うまで走査開始をロック
+  const setup = st.setup||{}, missing = setup.missing||[];
+  $("#btnStart").disabled = on || missing.length>0;
+  $("#btnStop").disabled = !on;
+  $("#btnCheck").disabled = missing.length>0;
+  const sn = $("#startNote");
+  if(missing.length){
+    sn.style.display = "block";
+    sn.innerHTML = `⚠ 設定の必須項目が未入力のため走査を開始できません（残り: ${missing.join("、")}）
+      <a href="#" onclick="switchPage('settings');return false;">→ 設定タブを開く</a>`;
+  } else sn.style.display = "none";
+  // 設定タブ側: 必須チェックリストとBot接続状態
+  $("#reqlist").innerHTML = (setup.required||[]).map(r=>
+    `<span class="chip ${r.ok?'ok':'bad'}">${r.ok?'✓':'✗'} ${r.label}</span>`).join("");
+  const bs = $("#botState");
+  bs.textContent = setup.bot_running ? "接続中 ✓" : (setup.token_set ? "未接続（トークンを確認）" : "未接続（トークン未設定）");
+  bs.style.color = setup.bot_running ? "var(--ok)" : "var(--bad)";
+  $("#chatCount").textContent = st.notify_chat_count||0;
+  if(st.settings_file) $("#settingsPath").textContent = st.settings_file;
+  // 初回表示: 必須が未完了なら設定タブから始める
+  if(!pageInited && setup.required){ pageInited = true; switchPage(missing.length ? "settings" : "scan"); }
+
   const mc = st.monitor_cfg||{};
   if(mc.interval_min) $("#interval").min = mc.interval_min;
   if(mc.interval_max) $("#interval").max = mc.interval_max;
+  const ml = $("#menuLink");
+  // http(s)のみ許可(共有ファイル由来の javascript: 等でのスクリプト実行を防ぐ)
+  if(mc.menu_url && /^https?:\/\//i.test(mc.menu_url)){ ml.href = mc.menu_url; ml.style.display = "inline"; }
+  else { ml.style.display = "none"; }
 
   const targets = Object.values(st.room_status||{});
   const box = $("#matrix");
+  renderNotifyRooms(mc.known_rooms||[], mc.notify_room_ids||[]);
   if(targets.length){
-    // 部屋ごとにグループ化 → 各部屋で プラン×日付 の表
+    // 部屋ごとにグループ化 → 各部屋で プラン×日付 の表。通知対象(🔔)の部屋を先頭に
+    const notifySet = new Set((mc.notify_room_ids||[]).map(String));
+    const isNotified = entries => !notifySet.size || entries.some(e=>notifySet.has(String(e.room_id)));
     const byRoom = {};
     targets.forEach(e=>{ (byRoom[e.room_label] = byRoom[e.room_label]||[]).push(e); });
+    // 日付列は全部屋で共通にする(部屋ごとに表を分けても列がそろうように)
+    const allDates=[...new Set(targets.flatMap(e=>e.dates||[]))].sort(dcmp);
     let html='', banner=false;
-    Object.keys(byRoom).forEach(room=>{
+    Object.keys(byRoom)
+      .sort((a,b)=>(notifySet.size&&isNotified(byRoom[a])?0:1)-(notifySet.size&&isNotified(byRoom[b])?0:1))
+      .forEach(room=>{
       const entries = byRoom[room];
-      const allDates=[...new Set(entries.flatMap(e=>e.dates||[]))].sort(dcmp);
-      html += `<div style="margin-bottom:16px;"><div style="font-weight:700;margin-bottom:6px;">🏨 ${room}</div>`;
-      html += '<table class="matrix"><tr><th style="text-align:left;">プラン＼日付</th>'+allDates.map(d=>`<th>${d}</th>`).join('')+'</tr>';
+      const mark = notifySet.size && isNotified(entries)
+        ? ' <span title="空室が出たらTelegram通知します">🔔</span>' : '';
+      html += `<div style="margin-bottom:16px;"><div style="font-weight:700;margin-bottom:6px;">🏨 ${escapeHtml(room)}${mark}</div>`;
+      html += '<table class="matrix"><tr><th class="planh">プラン＼日付</th>'+allDates.map(d=>`<th>${d}</th>`).join('')+'</tr>';
       entries.forEach(e=>{
         const dates=e.dates||[], counts=e.counts||{}, bu=e.book_url;
-        const labelCell = bu ? `<a href="${bu}" target="_blank" rel="noopener" class="planlink">${e.plan_label}</a>` : e.plan_label;
+        const labelCell = bu ? `<a href="${bu}" target="_blank" rel="noopener" class="planlink">${escapeHtml(e.plan_label)}</a>` : escapeHtml(e.plan_label);
         html += `<tr><td class="rowh">${labelCell}</td>`+allDates.map(d=>{
           if(!dates.includes(d)) return `<td class="na">—</td>`;
           const n = counts[d]||0;
-          if(n>0 && bu) return `<td class="ok"><a href="${bu}" target="_blank" rel="noopener" class="booklink">${n}室 ↗</a></td>`;
+          if(n>0 && bu) return `<td class="ok">`
+            + `<a href="#" class="bookopen" data-room="${e.room_id}" data-plan="${e.plan_id}" data-date="${d}"`
+            + ` title="予約フォームを自動入力して確認画面まで進める（予約の確定はしません）">${n}室</a>`
+            + ` <a href="${bu}" target="_blank" rel="noopener" class="booklink" title="予約カレンダーを開くだけ">↗</a></td>`;
           return `<td class="${n>0?'ok':'bad'}">${n>0?n+'室':'×'}</td>`;
         }).join('')+'</tr>';
-        if((e.plan_label||'').includes('3連泊') && dates.some(d=>(counts[d]||0)>0)) banner=true;
+        if((e.plan_label||'').includes('3連泊') && dates.some(d=>(counts[d]||0)>0)
+           && isNotified(entries)) banner=true;
       });
       html += '</table></div>';
     });
@@ -285,8 +442,8 @@ function renderStatus(st){
 
   const hist = st.history||[];
   $("#history").innerHTML = hist.length ? hist.slice().reverse().map(h=>{
-    const rl = h.room_label ? h.room_label+' ' : '';
-    const pl = h.plan_label ? `[${h.plan_label}] ` : '';
+    const rl = h.room_label ? escapeHtml(h.room_label)+' ' : '';
+    const pl = h.plan_label ? `[${escapeHtml(h.plan_label)}] ` : '';
     const label = h.type==="available" ? `🎉 ${rl}${pl}${h.date} 空室（${h.aki_num||0}室）` : `😢 ${rl}${pl}${h.date} 満室`;
     return `<div><span class="muted">${h.at}</span> ${label}</div>`;
   }).join("") : '<span class="muted">まだありません</span>';
@@ -310,13 +467,17 @@ function connect(){
     renderStatus(d.status);
     if(d.logs && d.logs.length){ allLogs.push(...d.logs); if(allLogs.length>2000) allLogs=allLogs.slice(-2000); renderLogs(); }
   };
-  es.onerror = () => { es.close(); setTimeout(connect, 3000); };
+  es.onerror = () => { es.close(); if(!SHUTDOWN) setTimeout(connect, 3000); };
 }
 
 // ---- 操作 ----
 async function post(url, body){ const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})}); return r.json(); }
-$("#btnStart").onclick = ()=> post("/api/control/start",{interval:+$("#interval").value}).then(()=>toast("監視を開始しました"));
-$("#btnStop").onclick = ()=> post("/api/control/stop").then(()=>toast("監視を停止しました"));
+$("#btnStart").onclick = ()=> post("/api/control/start",{interval:+$("#interval").value}).then(r=>{
+  if(r.ok) toast("走査を開始しました");
+  else if(r.reason==="missing") toast("必須項目が未入力です: "+r.missing.join("、"));
+  else toast("すでに走査中です");
+});
+$("#btnStop").onclick = ()=> post("/api/control/stop").then(()=>toast("走査を停止しました"));
 $("#btnCheck").onclick = ()=> { toast("チェック中..."); post("/api/control/check").then(()=>toast("チェック完了")); };
 $("#btnTest").onclick = ()=> post("/api/control/test-notify").then(r=>{
   if(r.ok) toast("テスト通知を送信しました（"+r.sent+"件）");
@@ -325,6 +486,32 @@ $("#btnTest").onclick = ()=> post("/api/control/test-notify").then(r=>{
 });
 $("#btnInterval").onclick = ()=> post("/api/control/interval",{interval:+$("#interval").value}).then(r=>{
   if(r.ok){ $("#interval").value=r.interval; toast(`間隔を ${r.interval}秒 に変更（次サイクルから反映／範囲 ${r.min}〜${r.max}秒）`); }
+});
+
+// ---- 空室セルのクリック → 予約フォームを開いて自動入力(handoff) ----
+let bookingBusy = false;
+$("#matrix").addEventListener("click", async ev=>{
+  const a = ev.target.closest("a.bookopen");
+  if(!a) return;
+  ev.preventDefault();
+  if(bookingBusy){ toast("予約フォームを起動中です。少し待ってください"); return; }
+  bookingBusy = true;
+  toast("🧾 予約フォームを起動中…（ブラウザ窓が開くまで10〜30秒。予約の確定はしません）", 30000);
+  try{
+    const r = await post("/api/booking/open",
+      {room_id:a.dataset.room, plan_id:a.dataset.plan, date:a.dataset.date});
+    if(!r.ok){ toast("起動失敗: "+r.error, 8000); return; }
+    const rep = r.report||{};
+    const st = {confirm_ready:"✅ 確認画面まで進めました。開いた窓で「予約する」を押せば完了です",
+                confirm_blocked:"⚠ 確認画面の手前で止まりました。開いた窓で内容を確認してください",
+                ready:"✅ 入力しました。開いた窓で確認画面へ進んでください",
+                full:"開いた瞬間に満室になっていました",
+                no_form:"予約フォームが表示されませんでした"}[rep.status] || ("結果: "+rep.status);
+    let m = `${st}（自動入力 ${(rep.filled||[]).length}項目`;
+    if((rep.empty_required||[]).length) m += `／要手入力: ${rep.empty_required.join("、")}`;
+    m += "）";
+    toast(m, 12000);
+  } finally { bookingBusy = false; }
 });
 
 document.querySelectorAll(".tab").forEach(t=> t.onclick = ()=>{
@@ -336,6 +523,53 @@ $("#logfilter").oninput = renderLogs;
 // ---- 設定 ----
 function setByPath(obj,path,val){ const ks=path.split("."); let o=obj; for(let i=0;i<ks.length-1;i++){ o[ks[i]]=o[ks[i]]||{}; o=o[ks[i]]; } o[ks[ks.length-1]]=val; }
 function getByPath(obj,path){ return path.split(".").reduce((o,k)=>o&&o[k]!=null?o[k]:undefined,obj); }
+
+function renderTargets(s){
+  // 部屋・プランを読みやすいチップで表示(直接編集は「上級者向け」の中)
+  const scan = getByPath(s,"monitor.scan_room_ids")||[];
+  const known = getByPath(s,"monitor.known_rooms")||[];
+  const plans = getByPath(s,"monitor.plans")||[];
+  const none = '<span class="muted">未設定（設定ファイルを読み込んでください）</span>';
+  const roomLabel = id => { const k = known.find(r=>String(r.room_id)===String(id));
+    return (k&&k.label) ? k.label : "部屋"+id; };
+  $("#roomsSummary").innerHTML = scan.length
+    ? scan.map(id=>`<span class="chip ok">${escapeHtml(roomLabel(id))}</span>`).join("")
+    : '<span class="chip ok">全部屋（自動で発見）</span>';
+  $("#plansSummary").innerHTML = plans.length
+    ? plans.map(p=>`<span class="chip ok">${escapeHtml(String(p.label||p.id||"?"))}（${escapeHtml((p.dates||[]).join("・"))}${p.nights?` / ${escapeHtml(String(p.nights))}泊`:""}）</span>`).join("")
+    : none;
+  renderNotifyRooms(known, getByPath(s,"monitor.notify_room_ids")||[]);
+}
+
+// ---- 通知する部屋(チェックボックス) ----
+let notifyRoomsSig = null;
+function renderNotifyRooms(known, selected){
+  const box = $("#notifyRooms");
+  const sig = JSON.stringify([known, selected]);
+  if(sig === notifyRoomsSig) return;   // 毎秒のSSE更新で操作中のチェックを壊さない
+  notifyRoomsSig = sig;
+  if(!known.length){
+    box.innerHTML = '<span class="muted">走査すると部屋の一覧がここに並びます</span>';
+    return;
+  }
+  const sel = new Set(selected.map(String));
+  box.innerHTML = known.map(r=>{
+    const rid = escapeHtml(String(r.room_id));
+    const checked = sel.has(String(r.room_id)) ? " checked" : "";
+    return `<label class="chip" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">`
+      + `<input type="checkbox" data-notify-room="${rid}"${checked}>`
+      + `${escapeHtml(String(r.label||("部屋"+r.room_id)))}</label>`;
+  }).join("");
+  box.querySelectorAll("input[data-notify-room]").forEach(cb=> cb.onchange = saveNotifyRooms);
+}
+async function saveNotifyRooms(){
+  const ids = [...document.querySelectorAll("#notifyRooms input[data-notify-room]:checked")]
+    .map(cb=>cb.dataset.notifyRoom);
+  const r = await post("/api/settings", {monitor:{notify_room_ids: ids}});
+  if(r.ok) toast(ids.length ? `通知対象を保存しました（${ids.length}部屋）`
+                            : "通知対象を保存しました（すべての部屋を通知）");
+  else toast("通知対象の保存に失敗しました");
+}
 
 async function loadSettings(){
   const s = await (await fetch("/api/settings")).json();
@@ -349,6 +583,7 @@ async function loadSettings(){
     el.value = v;
   });
   $("#interval").value = getByPath(s,"monitor.interval_seconds")||300;
+  renderTargets(s);
 }
 
 async function saveSettings(){
@@ -363,11 +598,50 @@ async function saveSettings(){
     setByPath(patch, el.dataset.k, v);
   });
   const r = await post("/api/settings", patch);
-  toast(r.ok?"設定を保存しました":"保存に失敗");
+  if(!r.ok){ toast("保存に失敗"); return; }
+  let msg = "設定を保存しました";
+  if(r.bot && r.bot.message) msg += "／" + r.bot.message;
+  toast(msg);
+  const tokEl = document.querySelector('[data-k="telegram.bot_token"]');
+  if(tokEl) tokEl.value = "";
+  loadSettings();
 }
 
+// ---- 予約アシストの動作テスト ----
+$("#btnTestBooking").onclick = async ()=>{
+  const b = $("#btnTestBooking");
+  b.disabled = true;
+  toast("テスト起動中… ブラウザ窓が開きます（30秒ほどかかることがあります）");
+  try{
+    const r = await post("/api/control/test-booking");
+    if(!r.ok){ toast("テスト失敗: " + r.error); return; }
+    const rep = r.report||{};
+    const st = {ready:"✅ 入力完了。開いた画面で内容を確認してください",
+                full:"満室のためフォームが表示されませんでした",
+                no_form:"フォームが表示されませんでした",
+                error:"エラーが発生しました"}[rep.status] || rep.status;
+    let m = `${st}（自動入力 ${(rep.filled||[]).length}項目）`;
+    if((rep.empty_required||[]).length) m += `／要手動入力: ${rep.empty_required.join("、")}`;
+    if((rep.errors||[]).length) m += `／エラー: ${rep.errors[0]}`;
+    toast(m);
+  } finally { b.disabled = false; }
+};
+
+// ---- 共有設定ファイルの読み込み ----
+$("#btnImport").onclick = ()=> $("#shareFile").click();
+$("#shareFile").onchange = async e=>{
+  const f = e.target.files[0]; if(!f) return;
+  const text = await f.text();
+  const r = await post("/api/settings/import", {text});
+  if(r.ok){
+    toast(r.missing.length ? `読み込みました（未入力: ${r.missing.join("、")}）` : "読み込みました。必須項目がそろいました！");
+    loadSettings();
+  } else toast("読み込み失敗: " + r.error);
+  e.target.value = "";
+};
+
 let toastT;
-function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),2500); }
+function toast(msg, ms){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"), ms || Math.max(2500, msg.length*90)); }
 
 // ---- 空室数の推移グラフ ----
 const CHART_COLORS = ['#4f8cff','#f5a623','#2fbf71','#b57bee','#ff5d6c','#00b8d4','#e0729a','#8bc34a'];
@@ -376,8 +650,14 @@ function renderChart(data){
   const el=$("#chart"), leg=$("#legend");
   const pts=(data.points||[]).map(p=>({t:new Date(p.ts).getTime(),p})).filter(x=>!isNaN(x.t)).sort((a,b)=>a.t-b.t);
   const series=data.series||[];
-  if(pts.length<1||!series.length){ el.innerHTML='<span class="muted">データがありません（監視すると蓄積されます）</span>'; leg.innerHTML=''; return; }
-  const W=800,H=300,pad={l:44,r:16,t:14,b:46};
+  const wh = data.window_hours||72;
+  if(pts.length<1||!series.length){
+    el.innerHTML = pts.length
+      ? `<span class="muted">直近${wh}時間はすべて満室（0室）でした（記録は続いています）</span>`
+      : '<span class="muted">データがありません（監視すると蓄積されます）</span>';
+    leg.innerHTML=''; return;
+  }
+  const W=800,H=210,pad={l:44,r:16,t:14,b:40};
   const iw=W-pad.l-pad.r, ih=H-pad.t-pad.b;
   const t0=pts[0].t, t1=Math.max(pts[pts.length-1].t, t0+1), span=Math.max(1,t1-t0), ymax=Math.max(1,data.ymax||1);
   const X=t=>pad.l+(t-t0)/span*iw, Y=v=>pad.t+(1-v/ymax)*ih;
@@ -392,8 +672,9 @@ function renderChart(data){
     if(started){ path+=` H ${X(t1)}`; s+=`<path d="${path}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" opacity="0.9"/>`; }
   });
   s+='</svg>'; el.innerHTML=s;
-  leg.innerHTML=series.map((se,i)=>`<span><i style="background:${CHART_COLORS[i%CHART_COLORS.length]}"></i>${se.label}</span>`).join('');
-  if(data.stats&&data.stats.first_ts) $("#chartStats").textContent=`（記録 ${data.stats.sample_rows}点 / ${fmtT(new Date(data.stats.first_ts).getTime())} 〜）`;
+  leg.innerHTML=series.map((se,i)=>`<span><i style="background:${CHART_COLORS[i%CHART_COLORS.length]}"></i>${escapeHtml(se.label)}</span>`).join('')
+    + (data.zero_rooms ? `<span class="muted">ほか${data.zero_rooms}部屋は0室のまま（非表示）</span>` : '');
+  if(data.stats&&data.stats.first_ts) $("#chartStats").textContent=`（直近${wh}時間・記録は ${fmtT(new Date(data.stats.first_ts).getTime())} から ${data.stats.sample_rows}点）`;
 }
 function renderSessions(sessions){
   const el=$("#sessions");

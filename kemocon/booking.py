@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import urllib.parse
 from typing import Any
 
@@ -21,8 +22,73 @@ log = logging.getLogger("kemocon")
 _open_sessions: list[dict] = []
 
 
+async def prepare_booking_async(*args, **kwargs) -> dict[str, Any]:
+    """prepare_booking を毎回使い捨ての専用スレッドで実行する(async用)。
+
+    Playwright同期APIは実行スレッドに自前のイベントループを作る。handoffで
+    セッションを開いたまま残すとループがスレッドに残留し、共有スレッドプール
+    (run_in_executor)がそのスレッドを再利用した2回目以降に
+    「Sync API inside the asyncio loop」で失敗する。プールを使わず
+    毎回新しいスレッドで実行することで回避する。
+    """
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
+
+    def worker() -> None:
+        try:
+            rep = prepare_booking(*args, **kwargs)
+        except BaseException as exc:  # noqa: BLE001
+            loop.call_soon_threadsafe(fut.set_exception, exc)
+        else:
+            loop.call_soon_threadsafe(fut.set_result, rep)
+
+    threading.Thread(target=worker, daemon=True, name="booking-handoff").start()
+    return await fut
+
+
+def _launch_browser(p, headless: bool):
+    """PCにあるChrome → Edge → Playwright同梱Chromium の順で起動を試す。
+
+    exe版はChromiumを同梱しない(サイズと `playwright install` 不要のため)ので、
+    利用者のPCに入っているブラウザを使う。Windows 10以降はEdgeが必ずある。
+    """
+    errors = []
+    for channel in ("chrome", "msedge", None):
+        try:
+            if channel:
+                return p.chromium.launch(headless=headless, channel=channel)
+            return p.chromium.launch(headless=headless)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{channel or 'chromium'}: {str(exc).splitlines()[0]}")
+    raise RuntimeError("ブラウザを起動できませんでした → " + " / ".join(errors))
+
+
+def _assert_trusted_host(form_url: str, mon: dict) -> None:
+    """予約フォームURLが在庫API/カレンダーと同じホスト・httpsか検証する。
+
+    フォーム自動入力は代表者氏名・電話・住所・メール等の個人情報を入力するため、
+    共有設定ファイル(第三者から受け取る場合がある)で form_url を攻撃者のサイトに
+    差し替えられると、個人情報が別サイトに打ち込まれてしまう。監視対象サイト
+    (api_url/date_url)と同じホストの https 以外は拒否する。
+    """
+    fp = urllib.parse.urlparse(form_url)
+    if fp.scheme != "https" or not fp.netloc:
+        raise ValueError(f"予約フォームURLが不正です(httpsのみ許可): {form_url}")
+    site = mon.get("site", {})
+    trusted = {urllib.parse.urlparse(site.get(k, "")).netloc
+               for k in ("api_url", "date_url")}
+    trusted.discard("")
+    if trusted and fp.netloc not in trusted:
+        raise ValueError(
+            f"予約フォームURLのホスト({fp.netloc})が監視対象サイトと一致しません。"
+            "共有設定ファイルが改ざんされている可能性があります")
+
+
 def build_form_url(mon: dict, plan_id: str, room_id: str, year: str, month: int, day: int) -> str:
     form_url = mon.get("site", {}).get("form_url", "")
+    _assert_trusted_host(form_url, mon)
     q = urllib.parse.parse_qs(urllib.parse.urlparse(mon.get("menu_url", "")).query)
     uid = q.get("uid", [""])[0]
     return (f"{form_url}?id={mon['yado_id']}&plan={plan_id}&room={room_id}"
@@ -117,7 +183,11 @@ def prepare_booking(mon: dict, res: dict, plan_id: str, room_id: str, day: int,
     url = build_form_url(mon, plan_id, room_id, year, month, day)
 
     p = sync_playwright().start()
-    browser = p.chromium.launch(headless=headless)
+    try:
+        browser = _launch_browser(p, headless)
+    except Exception:
+        p.stop()
+        raise
     page = browser.new_page()
     closed = False
     try:

@@ -11,9 +11,13 @@ env/
 
 # アプリのデータ・機密(共有しない)
 # settings.local.json = Telegramトークン・個人情報・予約情報
-# settings.share.json = 友達配布用(実サイト情報入り。リポジトリには含めない)
+# settings.share.* = 友達配布用(実サイト情報入り。リポジトリには含めない)
+# ※ひな形の settings.share.example.yaml だけはリポジトリに含める
 settings.local.json
 settings.share.json
+settings.share.yaml
+settings.share.yml
+!settings.share.example.yaml
 *.db
 *.db-shm
 *.db-wal
