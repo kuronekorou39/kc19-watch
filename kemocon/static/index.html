@@ -41,14 +41,6 @@
     padding:16px 18px; box-shadow:var(--shadow); }
   .card h2 { font-size:14px; margin:0 0 12px; color:var(--muted); text-transform:uppercase;
     letter-spacing:.04em; font-weight:700; }
-  .roomname { font-weight:700; margin-bottom:12px; }
-  .dates { display:flex; gap:10px; }
-  .date { flex:1; text-align:center; border:1px solid var(--border); border-radius:10px; padding:10px 4px; }
-  .date .d { font-size:12px; color:var(--muted); }
-  .date .s { font-size:22px; font-weight:800; margin-top:4px; }
-  .date.ok { border-color:var(--ok); background:rgba(47,191,113,.10); }
-  .date.ok .s { color:var(--ok); }
-  .date.bad .s { color:var(--bad); }
   /* 列幅を固定し、どの部屋の表も同じ列割りにする(空室表示「N室↗」で列がずれないように) */
   table.matrix { width:100%; border-collapse:collapse; margin-top:4px; table-layout:fixed; }
   table.matrix th, table.matrix td { border:1px solid var(--border); padding:9px 6px; text-align:center; font-size:16px; }
@@ -81,9 +73,6 @@
   .legend i { width:16px; height:3px; border-radius:2px; display:inline-block; }
   .banner { margin-top:12px; padding:10px; border-radius:8px; text-align:center; font-weight:700;
     background:rgba(245,183,79,.15); color:var(--warn); display:none; }
-  .kv { display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px solid var(--border); font-size:14px; }
-  .kv:last-child { border-bottom:none; }
-  .kv .k { color:var(--muted); }
   .history { max-height:200px; overflow:auto; font-size:13px; }
   .history div { padding:4px 0; border-bottom:1px solid var(--border); }
   section.logs { margin-top:20px; }
@@ -272,13 +261,14 @@
 
   <details class="card sect">
     <summary><span class="badge opt">任意</span> ブラウザ操作（予約アシスト）<span class="muted" style="font-weight:400;font-size:13px;">— 使う場合だけ開いて設定</span></summary>
-    <p class="note">「有効化」すると、空室検知時に予約フォームを<b>自動で開いて入力し画面を残します</b>（Botは確定しません＝あなたが最後に確認して予約完了）。PCに Chrome または Edge が入っている必要があります。</p>
+    <p class="note">「有効化」すると、空室検知時に予約フォームを<b>自動で開いて入力し画面を残します</b>（Botは確定しません＝あなたが最後に確認して予約完了）。
+      対象は<b>「通知する部屋」と同じ範囲</b>です。PCに Chrome または Edge が入っている必要があります。</p>
     <p class="note">📁 ここで入力した代表者情報の保存先: <code id="settingsPath" style="word-break:break-all;">settings.local.json</code><br>
       このPCの中だけに保存されます（外部への送信なし。共有設定ファイルや配布物にも含まれません。使うのは予約フォームへの自動入力の時だけです）。</p>
     <div class="form-grid">
       <div class="field"><label>自動起動を有効化</label><select data-k="reservation.enabled" data-bool="1"><option value="false">無効</option><option value="true">有効</option></select></div>
-      <div class="field"><label>対象部屋ID (カンマ区切り, 空=全部)</label><input data-k="reservation.auto_book_room_ids" data-list="1"></div>
-      <div class="field"><label>対象プランID (カンマ区切り, 空=全部)</label><input data-k="reservation.auto_book_plan_ids" data-list="1"></div>
+      <div class="field"><label>対象部屋ID (空=通知する部屋と同じ／さらに絞る場合だけ指定)</label><input data-k="reservation.auto_book_room_ids" data-list="1"></div>
+      <div class="field"><label>対象プランID (空=絞らない)</label><input data-k="reservation.auto_book_plan_ids" data-list="1"></div>
       <div class="field"><label>同時に開く窓の上限</label><input type="number" data-k="reservation.max_windows" min="1"></div>
       <div class="field"><label>チェックイン時刻</label><input data-k="reservation.checkin_time" placeholder="15:00"></div>
       <div class="field"><label>支払い方法</label><select data-k="reservation.payment_method"><option>現地決済</option><option>クレジットカード事前決済</option></select></div>
@@ -400,15 +390,15 @@ function renderStatus(st){
       const mark = notifySet.size && isNotified(entries)
         ? ' <span title="空室が出たらTelegram通知します">🔔</span>' : '';
       html += `<div style="margin-bottom:16px;"><div style="font-weight:700;margin-bottom:6px;">🏨 ${escapeHtml(room)}${mark}</div>`;
-      html += '<table class="matrix"><tr><th class="planh">プラン＼日付</th>'+allDates.map(d=>`<th>${d}</th>`).join('')+'</tr>';
+      html += '<table class="matrix"><tr><th class="planh">プラン＼日付</th>'+allDates.map(d=>`<th>${escapeHtml(d)}</th>`).join('')+'</tr>';
       entries.forEach(e=>{
-        const dates=e.dates||[], counts=e.counts||{}, bu=e.book_url;
+        const dates=e.dates||[], counts=e.counts||{}, bu=safeUrl(e.book_url);
         const labelCell = bu ? `<a href="${bu}" target="_blank" rel="noopener" class="planlink">${escapeHtml(e.plan_label)}</a>` : escapeHtml(e.plan_label);
         html += `<tr><td class="rowh">${labelCell}</td>`+allDates.map(d=>{
           if(!dates.includes(d)) return `<td class="na">—</td>`;
           const n = counts[d]||0;
           if(n>0 && bu) return `<td class="ok">`
-            + `<a href="#" class="bookopen" data-room="${e.room_id}" data-plan="${e.plan_id}" data-date="${d}"`
+            + `<a href="#" class="bookopen" data-room="${escapeHtml(e.room_id)}" data-plan="${escapeHtml(e.plan_id)}" data-date="${escapeHtml(d)}"`
             + ` title="予約フォームを自動入力して確認画面まで進める（予約の確定はしません）">${n}室</a>`
             + ` <a href="${bu}" target="_blank" rel="noopener" class="booklink" title="予約カレンダーを開くだけ">↗</a></td>`;
           return `<td class="${n>0?'ok':'bad'}">${n>0?n+'室':'×'}</td>`;
@@ -457,7 +447,11 @@ function renderLogs(){
     `<div class="line ${l.level}"><span class="ts">${l.ts}</span> [${l.source}] ${escapeHtml(l.msg)}</div>`).join("");
   if($("#autoscroll").checked) box.scrollTop = box.scrollHeight;
 }
-function escapeHtml(s){ return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+// 属性値にも入れられるよう引用符もエスケープする(部屋名・プラン名・日付は
+// APIや共有ファイル由来の外部データ)
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// リンクはhttp(s)のみ許可(共有ファイル由来の javascript: 等を無効化)
+function safeUrl(u){ return (u && /^https?:\/\//i.test(u)) ? escapeHtml(u) : ""; }
 
 // ---- ライブ更新(SSE) ----
 function connect(){
@@ -511,6 +505,7 @@ $("#matrix").addEventListener("click", async ev=>{
     if((rep.empty_required||[]).length) m += `／要手入力: ${rep.empty_required.join("、")}`;
     m += "）";
     toast(m, 12000);
+  } catch(err){ toast("起動失敗（通信エラー）: " + err, 8000);
   } finally { bookingBusy = false; }
 });
 
@@ -624,6 +619,7 @@ $("#btnTestBooking").onclick = async ()=>{
     if((rep.empty_required||[]).length) m += `／要手動入力: ${rep.empty_required.join("、")}`;
     if((rep.errors||[]).length) m += `／エラー: ${rep.errors[0]}`;
     toast(m);
+  } catch(err){ toast("テスト失敗（通信エラー）: " + err);
   } finally { b.disabled = false; }
 };
 
@@ -631,13 +627,20 @@ $("#btnTestBooking").onclick = async ()=>{
 $("#btnImport").onclick = ()=> $("#shareFile").click();
 $("#shareFile").onchange = async e=>{
   const f = e.target.files[0]; if(!f) return;
-  const text = await f.text();
-  const r = await post("/api/settings/import", {text});
-  if(r.ok){
-    toast(r.missing.length ? `読み込みました（未入力: ${r.missing.join("、")}）` : "読み込みました。必須項目がそろいました！");
-    loadSettings();
-  } else toast("読み込み失敗: " + r.error);
-  e.target.value = "";
+  try{
+    const text = await f.text();
+    const r = await post("/api/settings/import", {text});
+    if(r.ok){
+      toast(r.missing.length ? `読み込みました（未入力: ${r.missing.join("、")}）` : "読み込みました。必須項目がそろいました！");
+      loadSettings();
+    } else toast("読み込み失敗: " + r.error);
+  }catch(err){
+    toast("読み込み失敗（通信エラー）: " + err);
+  }finally{
+    // 必ずリセットする(残っていると同じファイルの再選択でchangeが発火せず、
+    // ボタンが死んだように見える)
+    e.target.value = "";
+  }
 };
 
 let toastT;

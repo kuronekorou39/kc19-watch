@@ -26,8 +26,6 @@ class AppState:
         self.last_error: str | None = None
         # {room_name: {"2": {"11/6": bool, ...}, ...}}  人数×日付マトリクス
         self.room_status: dict = {}
-        # {date: aki_num}  現在の空室数(可視化・表示用)
-        self.room_counts: dict[str, int] = {}
         # 変化履歴(新しいものが末尾)
         self.history: deque[dict[str, Any]] = deque(maxlen=200)
         # ログ(ダッシュボード表示用)。{ts, level, source, msg}
@@ -74,7 +72,6 @@ class AppState:
             "last_error": self.last_error,
             "uptime_seconds": self.uptime_seconds(),
             "room_status": self.room_status,
-            "room_counts": self.room_counts,
             "history": list(self.history)[-30:],
         }
 

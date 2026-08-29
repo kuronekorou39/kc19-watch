@@ -43,43 +43,60 @@ def _restore_history() -> None:
         })
 
 
+# start/stop は途中に複数の await を挟むため、保存ボタン連打や
+# 「保存と共有ファイル取り込みの同時実行」で二重起動(同一トークンの二重
+# ポーリング=Telegram 409)にならないよう直列化する
+_BOT_LOCK = asyncio.Lock()
+
+
+async def _teardown_application(application) -> None:
+    """PTB Application を段階ごとに確実に畳む(1段の失敗で残りを飛ばさない)。"""
+    for step in (application.updater.stop, application.stop, application.shutdown):
+        try:
+            await step()
+        except Exception as exc:  # noqa: BLE001
+            log.error("Bot停止中エラー(%s): %s", getattr(step, "__name__", step), exc)
+
+
 async def start_bot(app: FastAPI) -> tuple[bool, str]:
     """Telegram Bot を起動して常駐させる。(成功?, ユーザー向けメッセージ) を返す。
 
     設定画面でトークンを保存した直後にも呼ばれる(再起動なしで接続できるように)。
     """
-    if getattr(app.state, "ptb", None) is not None:
-        return True, "接続済みです"
-    settings = config.load_settings()
-    if not settings["telegram"].get("bot_token"):
-        return False, "トークンが未設定です"
-    try:
-        application = build_application(settings)
-        await application.initialize()
-        await application.start()
-        await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-    except Exception as exc:  # noqa: BLE001
-        log.error("Telegram Bot の起動に失敗しました(トークン不正?): %s", exc)
-        controller.bot = None
-        return False, "接続に失敗しました。トークンを確認してください"
-    controller.bot = application.bot
-    app.state.ptb = application
-    log.info("✅ Telegram Bot 接続完了")
-    return True, "Telegramに接続しました"
+    async with _BOT_LOCK:
+        if getattr(app.state, "ptb", None) is not None:
+            return True, "接続済みです"
+        settings = config.load_settings()
+        if not settings["telegram"].get("bot_token"):
+            return False, "トークンが未設定です"
+        application = None
+        try:
+            application = build_application(settings)
+            await application.initialize()
+            await application.start()
+            await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Telegram Bot の起動に失敗しました(トークン不正?): %s", exc)
+            controller.bot = None
+            # 途中まで起動したPTBを畳む(放置するとポーリングやHTTPクライアントが
+            # 参照不能なまま生き残り、再試行のたびに積み上がる)
+            if application is not None:
+                await _teardown_application(application)
+            return False, "接続に失敗しました。トークンを確認してください"
+        controller.bot = application.bot
+        app.state.ptb = application
+        log.info("✅ Telegram Bot 接続完了")
+        return True, "Telegramに接続しました"
 
 
 async def stop_bot(app: FastAPI) -> None:
     """Bot を停止する(トークン差し替え時・シャットダウン時)。"""
-    application = getattr(app.state, "ptb", None)
-    app.state.ptb = None
-    controller.bot = None
-    if application:
-        try:
-            await application.updater.stop()
-            await application.stop()
-            await application.shutdown()
-        except Exception as exc:  # noqa: BLE001
-            log.error("Bot停止中エラー: %s", exc)
+    async with _BOT_LOCK:
+        application = getattr(app.state, "ptb", None)
+        app.state.ptb = None
+        controller.bot = None
+        if application:
+            await _teardown_application(application)
 
 
 @asynccontextmanager
@@ -146,7 +163,7 @@ def _build_status() -> dict:
     settings = config.load_settings()
     snap = STATE.snapshot()
     snap["system"] = _system_metrics()
-    snap["status_text"] = build_status_text()
+    snap["status_text"] = build_status_text(settings)
     snap["notify_chat_count"] = len(settings["telegram"]["notify_chat_ids"])
     # 代表者情報などの保存先(設定タブに表示。どこに何が保存されるか利用者が確認できるように)
     snap["settings_file"] = str(config.SETTINGS_FILE)
@@ -268,6 +285,11 @@ async def api_history(limit: int = 8000, hours: int = 72) -> JSONResponse:
             carry.update(per_ts[ts])
         else:
             plist.append({"ts": ts, **per_ts[ts]})
+    # 引き継ぎは「今も走査している部屋」だけ。走査から外れた部屋に古い値の
+    # 起点を作ると、確認していないのに空室が続いているような線が描かれてしまう
+    if STATE.room_status:
+        current = {e["room_label"] for e in STATE.room_status.values()}
+        carry = {room: v for room, v in carry.items() if room in current}
     if carry:
         plist.insert(0, {"ts": cutoff, **carry})
     # 「現在」の点(部屋ごとの最大空室数)を足す
@@ -373,9 +395,14 @@ async def api_test_booking(request: Request) -> JSONResponse:
     if not room_id:
         return JSONResponse({"ok": False, "error":
             "対象の部屋がまだ分かりません。先に「🔄 今すぐチェック」を1回実行してください"})
-    plan = next((p for p in plans if str(p["id"]) == str(body.get("plan_id"))), plans[0])
-    date = plan["dates"][0]
-    month, day = (int(x) for x in date.split("/"))
+    # プラン設定は共有ファイル/手入力由来なので形式不備でも500にせず説明を返す
+    try:
+        plan = next((p for p in plans if str(p.get("id")) == str(body.get("plan_id"))), plans[0])
+        date = str(plan["dates"][0])
+        month, day = (int(x) for x in date.split("/"))
+    except (KeyError, IndexError, ValueError, TypeError) as exc:
+        return JSONResponse({"ok": False, "error": f"プラン設定の形式が不正です({exc})。"
+                             "設定タブの「プラン設定」を確認してください"})
     log.info("🧪 予約アシストのテスト起動: room=%s plan=%s date=%s", room_id, plan["id"], date)
     try:
         rep = await booking.prepare_booking_async(
@@ -432,10 +459,21 @@ async def api_shutdown(request: Request) -> JSONResponse:
 async def api_import_settings(request: Request) -> JSONResponse:
     """共有設定ファイル(YAML/JSON)の中身を受け取り、設定に取り込む。"""
     body = await _json(request)
+    text = str(body.get("text", ""))
     try:
-        data = config.parse_share_text(str(body.get("text", "")))
+        data = config.parse_share_text(text)
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)})
+    # exeの隣に同じ内容の共有ファイルが置かれている場合は取り込みマーカーも記録し、
+    # 次回起動時の自動再取り込みで画面上の修正が巻き戻されるのを防ぐ
+    for name in config.SHARE_FILE_NAMES:
+        path = config.BASE_DIR / name
+        try:
+            if path.exists() and path.read_text(encoding="utf-8") == text:
+                data["share_import"] = {"file": name, "mtime": int(path.stat().st_mtime)}
+                break
+        except OSError:
+            pass
     updated = config.merge_and_save(data)
     STATE.interval = config.clamp_interval(updated["monitor"]["interval_seconds"], updated["monitor"])
     # ファイルにトークンが含まれていた場合は接続も試みる

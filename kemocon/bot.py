@@ -28,22 +28,23 @@ async def _is_allowed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
 
 
 def _remember_chat(chat_id: int) -> None:
-    settings = config.load_settings()
-    ids = settings["telegram"]["notify_chat_ids"]
+    # merge_and_save 経由で保存する(load→saveの丸ごと保存だと、環境変数
+    # TELEGRAM_BOT_TOKEN で注入されたトークンまでファイルに書かれてしまう)
+    ids = config.load_settings(apply_env=False)["telegram"]["notify_chat_ids"]
     if chat_id not in ids:
-        ids.append(chat_id)
-        config.save_settings(settings)
+        config.merge_and_save({"telegram": {"notify_chat_ids": ids + [chat_id]}})
 
 
-def build_status_text() -> str:
+def build_status_text(settings: dict | None = None) -> str:
     """/now 用の状況テキスト(部屋→プラン別)。
 
     全部屋走査でも読める長さに保つ: 通知対象(🔔)の部屋を先頭に並べ、
     Telegramの上限(4096字)に収まらない分は部屋数だけにまとめる。
+    settings は読み込み済みがあれば渡す(毎秒のSSEで二重読みしないため)。
     """
     text = "空室状況\n\n"
     if STATE.room_status:
-        want = notify_room_ids(config.load_settings()["monitor"])
+        want = notify_room_ids((settings or config.load_settings())["monitor"])
         by_room: dict = {}
         for e in STATE.room_status.values():
             by_room.setdefault((e["room_id"], e["room_label"]), []).append(e)
@@ -62,10 +63,12 @@ def build_status_text() -> str:
                 block += f"  [{e['plan_label']}] {cells}\n"
             blocks.append(block)
         omitted = 0
-        for block in blocks:
+        for i, block in enumerate(blocks):
+            # 上限に達したら以降は全部省略する(途中を飛ばして後ろの小さい部屋だけ
+            # 載る、という優先度の逆転をしない。blocksは通知対象が先頭)
             if len(text) + len(block) > 3500:
-                omitted += 1
-                continue
+                omitted = len(blocks) - i
+                break
             text += block
         if omitted:
             text += f"…ほか{omitted}部屋(ダッシュボードで確認できます)\n"

@@ -18,9 +18,6 @@ from typing import Any
 
 log = logging.getLogger("kemocon")
 
-# 開いたままにしているhandoffセッションを保持(GCで閉じないように)
-_open_sessions: list[dict] = []
-
 
 async def prepare_booking_async(*args, **kwargs) -> dict[str, Any]:
     """prepare_booking を毎回使い捨ての専用スレッドで実行する(async用)。
@@ -30,22 +27,61 @@ async def prepare_booking_async(*args, **kwargs) -> dict[str, Any]:
     (run_in_executor)がそのスレッドを再利用した2回目以降に
     「Sync API inside the asyncio loop」で失敗する。プールを使わず
     毎回新しいスレッドで実行することで回避する。
+
+    handoffで窓を残した場合は、結果を返した後も同じスレッドが窓が閉じられる
+    まで見届けて後片付けする(Playwrightオブジェクトは生成スレッドに紐づくため、
+    他スレッドからは閉じられない)。
     """
     import asyncio
 
     loop = asyncio.get_running_loop()
     fut: asyncio.Future = loop.create_future()
 
+    def deliver(kind: str, value: Any) -> None:
+        """スレッドから結果を返す。呼び出し元がキャンセル済み/ループ終了後も落ちない。"""
+        def apply() -> None:
+            if fut.cancelled():
+                if kind == "exc":
+                    log.error("予約フォーム処理の結果は破棄されました(呼び出し元が停止): %s", value)
+                return
+            (fut.set_exception if kind == "exc" else fut.set_result)(value)
+        try:
+            loop.call_soon_threadsafe(apply)
+        except RuntimeError:  # イベントループ終了後(シャットダウン中)
+            if kind == "exc":
+                log.error("予約フォーム処理が失敗しました(アプリ停止中): %s", value)
+
     def worker() -> None:
         try:
             rep = prepare_booking(*args, **kwargs)
         except BaseException as exc:  # noqa: BLE001
-            loop.call_soon_threadsafe(fut.set_exception, exc)
+            deliver("exc", exc)
         else:
-            loop.call_soon_threadsafe(fut.set_result, rep)
+            session = rep.pop("_session", None)
+            deliver("result", rep)
+            if session:
+                _watch_session(session)
 
     threading.Thread(target=worker, daemon=True, name="booking-handoff").start()
     return await fut
+
+
+def _watch_session(s: dict) -> None:
+    """handoffで残したブラウザ窓が閉じられるまで待ち、閉じられたら後片付けする。
+
+    これが無いと、開いた窓ごとに Playwright ドライバ(nodeプロセス)が
+    アプリ終了まで残り続ける。daemonスレッド上で動くのでアプリ終了は妨げない。
+    """
+    try:
+        while not s["page"].is_closed():
+            s["page"].wait_for_timeout(1000)
+    except Exception:  # noqa: BLE001
+        pass  # 窓が閉じられた/接続が切れた
+    for closer in (s["browser"].close, s["p"].stop):
+        try:
+            closer()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _launch_browser(p, headless: bool):
@@ -61,7 +97,7 @@ def _launch_browser(p, headless: bool):
                 return p.chromium.launch(headless=headless, channel=channel)
             return p.chromium.launch(headless=headless)
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"{channel or 'chromium'}: {str(exc).splitlines()[0]}")
+            errors.append(f"{channel or 'chromium'}: {(str(exc).splitlines() or [repr(exc)])[0]}")
     raise RuntimeError("ブラウザを起動できませんでした → " + " / ".join(errors))
 
 
@@ -79,6 +115,7 @@ def _assert_trusted_host(form_url: str, mon: dict) -> None:
     site = mon.get("site", {})
     trusted = {urllib.parse.urlparse(site.get(k, "")).netloc
                for k in ("api_url", "date_url")}
+    trusted.add(urllib.parse.urlparse(mon.get("menu_url", "")).netloc)
     trusted.discard("")
     if trusted and fp.netloc not in trusted:
         raise ValueError(
@@ -165,12 +202,11 @@ def _apply(page, item: dict, report: dict) -> None:
 def prepare_booking(mon: dict, res: dict, plan_id: str, room_id: str, day: int,
                     year: str | None = None, month: int = 11, nights: int | None = None,
                     headless: bool | None = None, keep_open: bool = True,
-                    proceed_to_confirm: bool = False,
-                    screenshot_path: str | None = None) -> dict[str, Any]:
+                    proceed_to_confirm: bool = False) -> dict[str, Any]:
     """予約フォームを開いて行けるところまで自動入力し、画面を残して人に渡す。
 
     Botは確認/確定ボタンを押さない。フォーム構造が違っても落ちずに報告する。
-    戻り値: {status, url, filled[], skipped_missing[], empty_required[], errors[], screenshot}
+    戻り値: {status, url, filled[], skipped_missing[], empty_required[], errors[]}
       status = "ready"(入力完了・要ユーザー確定) / "full"(満室) / "no_form" / "error"
     """
     from playwright.sync_api import sync_playwright
@@ -179,7 +215,7 @@ def prepare_booking(mon: dict, res: dict, plan_id: str, room_id: str, day: int,
     if headless is None:
         headless = bool(res.get("headless", False))   # 実運用は画面ありで人に渡す
     report: dict[str, Any] = {"status": "", "url": "", "filled": [], "skipped_missing": [],
-                              "empty_required": [], "errors": [], "screenshot": screenshot_path}
+                              "empty_required": [], "errors": []}
     url = build_form_url(mon, plan_id, room_id, year, month, day)
 
     p = sync_playwright().start()
@@ -188,8 +224,15 @@ def prepare_booking(mon: dict, res: dict, plan_id: str, room_id: str, day: int,
     except Exception:
         p.stop()
         raise
-    page = browser.new_page()
-    closed = False
+    try:
+        page = browser.new_page()
+    except Exception:
+        try:
+            browser.close()
+        except Exception:  # noqa: BLE001
+            pass
+        p.stop()
+        raise
     try:
         page.goto(url, wait_until="networkidle", timeout=40000)
         page.wait_for_timeout(1500)
@@ -233,33 +276,19 @@ def prepare_booking(mon: dict, res: dict, plan_id: str, room_id: str, day: int,
                 else:
                     report["errors"].append("「確認画面へ」ボタンが見つからない")
 
-        if screenshot_path:
-            try:
-                page.screenshot(path=screenshot_path, full_page=True)
-            except Exception:
-                pass
     except Exception as exc:  # noqa: BLE001
         report["status"] = report["status"] or "error"
         report["errors"].append(str(exc))
 
-    # handoff: フォームが出ていて keep_open なら画面を残す(確認画面まで進んだ/止まった場合も)。それ以外は閉じる
+    # handoff: フォームが出ていて keep_open なら画面を残す(確認画面まで進んだ/止まった場合も)。
+    # セッションは prepare_booking_async のスレッドが窓が閉じられるまで見届けて片付ける
     if keep_open and report["status"] in ("ready", "confirm_ready", "confirm_blocked"):
-        _open_sessions.append({"p": p, "browser": browser, "page": page})
+        report["_session"] = {"p": p, "browser": browser, "page": page}
+        report["handoff_open"] = True
     else:
         try:
             browser.close(); p.stop()
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
-        closed = True
-    report["handoff_open"] = (not closed)
+        report["handoff_open"] = False
     return report
-
-
-def close_open_sessions() -> None:
-    """開いたままのhandoffブラウザを片付ける(同一スレッドから呼ぶこと)。"""
-    while _open_sessions:
-        s = _open_sessions.pop()
-        try:
-            s["browser"].close(); s["p"].stop()
-        except Exception:
-            pass

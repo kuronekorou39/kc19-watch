@@ -81,7 +81,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "reservation": {
         # Trueで、空室検知時に予約フォームを自動で開いて入力し人に渡す(handoff)
         "enabled": False,
-        # 自動起動の対象。空=監視中の全部屋/全プラン。特定だけにするなら room_id / plan_id を列挙
+        # 自動起動の対象は常に「通知する部屋(notify_room_ids)」と同じ範囲。
+        # そこからさらに絞る場合だけ room_id / plan_id を列挙する(空=絞らない)
         "auto_book_room_ids": [],
         "auto_book_plan_ids": [],
         "max_windows": 4,                 # 1チェックで自動起動するフォーム窓の上限(取りすぎ防止)
@@ -118,11 +119,11 @@ SHARE_FILE_NAMES = ("settings.share.yaml", "settings.share.yml", "settings.share
 REQUIRED_FIELDS: list[tuple[str, tuple[str, ...]]] = [
     ("施設ID", ("monitor", "yado_id")),
     ("在庫検索APIのURL", ("monitor", "site", "api_url")),
-    ("予約カレンダーのURL", ("monitor", "site", "date_url")),
-    ("予約フォームのURL", ("monitor", "site", "form_url")),
     ("メニューページのURL", ("monitor", "menu_url")),
     ("監視プラン", ("monitor", "plans")),
 ]
+# 予約カレンダー/フォームのURL(site.date_url / site.form_url)は予約アシスト用で、
+# 監視自体には不要なので必須にしない(無ければリンクは menu_url にフォールバック)
 
 
 def setup_console() -> None:

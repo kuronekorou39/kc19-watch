@@ -98,10 +98,7 @@ def _effective_interval(mon: dict) -> tuple[int, bool]:
 
 
 def _plans(mon: dict) -> list[dict]:
-    if mon.get("plans"):
-        return mon["plans"]
-    dates = mon.get("target_dates", ["11/6", "11/7", "11/8"])
-    return [{"id": str(p), "label": str(p), "dates": dates} for p in mon.get("plan_ids", ["517"])]
+    return mon.get("plans") or []
 
 
 def _room_label_overrides(mon: dict) -> dict[str, str]:
@@ -310,6 +307,7 @@ class MonitorController:
         self._task: asyncio.Task | None = None
         self.session_id: int | None = None
         self._last_counts: dict | None = None
+        self._known_rooms_seen: dict | None = None   # 前回走査の部屋(known_rooms書き込み省略用)
         self._autobooked: set = set()    # 自動起動済みの (room|plan|date) 重複防止
 
     async def start(self, interval: int | None = None) -> bool:
@@ -372,6 +370,17 @@ class MonitorController:
                 STATE.last_error = "対象が取得できませんでした(応答異常?)"
                 log.error(STATE.last_error)
                 return
+            # 応答から消えた部屋×プランは「満室扱い」で引き継ぐ。これが無いと、
+            # 一時的に消えた部屋が空室で復活しても detect_changes が比較相手を
+            # 失って空室通知を出せない(消えた時の満室通知も出ない)
+            for key, old_e in STATE.room_status.items():
+                if key not in targets:
+                    targets[key] = {
+                        **old_e,
+                        "matrix": {g: {d: False for d in old_e.get("dates", [])}
+                                   for g in old_e.get("matrix", {})},
+                        "counts": {d: 0 for d in old_e.get("dates", [])},
+                    }
             STATE.check_count += 1
             ts = store.now_iso()
             STATE.last_checked_ts = time.time()
@@ -405,14 +414,27 @@ class MonitorController:
             log.error("チェック中エラー: %s", exc)
 
     def _update_known_rooms(self, targets: dict) -> None:
-        """走査で発見した部屋一覧を設定に保存する(GUIの通知対象チェックボックス用)。"""
+        """走査で発見した部屋を known_rooms に追記する(GUIの通知対象チェックボックス用)。
+
+        丸ごと置き換えではなくマージする: 一時的に応答から消えた部屋の
+        チェックボックスが消えて、通知選択が黙って失われるのを防ぐ。
+        毎サイクルのファイルI/Oを避けるため、前回の走査結果を覚えておき
+        変化があった時だけ読み書きする。
+        """
         seen: dict[str, str] = {}
         for e in targets.values():
             seen.setdefault(e["room_id"], e["room_label"])
-        rooms = [{"room_id": rid, "label": seen[rid]}
-                 for rid in sorted(seen, key=lambda x: int(x) if x.isdigit() else 10**9)]
-        if config.load_settings().get("monitor", {}).get("known_rooms") != rooms:
+        if seen == self._known_rooms_seen:
+            return
+        settings = config.load_settings()
+        merged = {str(r.get("room_id")): r.get("label", "")
+                  for r in settings["monitor"].get("known_rooms", []) if r.get("room_id")}
+        merged.update(seen)
+        rooms = [{"room_id": rid, "label": merged[rid]}
+                 for rid in sorted(merged, key=lambda x: int(x) if x.isdigit() else 10**9)]
+        if settings["monitor"].get("known_rooms") != rooms:
             config.merge_and_save({"monitor": {"known_rooms": rooms}})
+        self._known_rooms_seen = seen
 
     async def _maybe_autobook(self, events: list[dict], settings: dict) -> None:
         """空室検知時に予約フォームを自動で開いて入力し、人に渡す(handoff)。"""
@@ -420,15 +442,18 @@ class MonitorController:
         if not res.get("enabled"):
             return
         mon = settings["monitor"]
-        # 対象部屋の無指定時は通知対象に合わせる(全部屋走査で無関係な部屋の窓を開かないため)
-        room_filter = ({str(x) for x in (res.get("auto_book_room_ids") or [])}
-                       or notify_room_ids(mon))
+        # 対象は常に「通知対象の部屋」と同じ範囲(全部屋走査で無関係な部屋の窓を
+        # 開かないため)。auto_book_room_ids / plan_ids はそこからさらに絞る指定
+        notify = notify_room_ids(mon)
+        room_filter = {str(x) for x in (res.get("auto_book_room_ids") or [])}
         plan_filter = {str(x) for x in (res.get("auto_book_plan_ids") or [])}
         max_windows = int(res.get("max_windows", 4))
         opened = 0
         for e in [ev for ev in events if ev["type"] == "available"]:
             if opened >= max_windows:
                 break
+            if notify and e["room_id"] not in notify:
+                continue
             if room_filter and e["room_id"] not in room_filter:
                 continue
             if plan_filter and e["plan_id"] not in plan_filter:
