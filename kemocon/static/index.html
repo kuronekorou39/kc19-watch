@@ -393,16 +393,36 @@ function renderStatus(st){
       html += '<table class="matrix"><tr><th class="planh">プラン＼日付</th>'+allDates.map(d=>`<th>${escapeHtml(d)}</th>`).join('')+'</tr>';
       entries.forEach(e=>{
         const dates=e.dates||[], counts=e.counts||{}, bu=safeUrl(e.book_url);
+        const nights=+e.nights||1;
         const labelCell = bu ? `<a href="${bu}" target="_blank" rel="noopener" class="planlink">${escapeHtml(e.plan_label)}</a>` : escapeHtml(e.plan_label);
-        html += `<tr><td class="rowh">${labelCell}</td>`+allDates.map(d=>{
-          if(!dates.includes(d)) return `<td class="na">—</td>`;
+        // 連泊プランはチェックイン日のセルを滞在日数ぶん結合して表示する。
+        // 「—」は本当に「そのプランに無い日」だけになる(滞在に含まれる日と区別)
+        let cells='';
+        for(let i=0;i<allDates.length;){
+          const d=allDates[i];
+          if(!dates.includes(d)){ cells+=`<td class="na" title="このプランには無い日">—</td>`; i++; continue; }
+          let span=1;
+          const [m0,d0]=d.split('/').map(Number);
+          for(let k=1;k<nights && i+k<allDates.length;k++){
+            if(dates.includes(allDates[i+k])) break;   // 次のチェックイン日は飲み込まない
+            const [m1,d1]=allDates[i+k].split('/').map(Number);
+            if(new Date(2000,m0-1,d0+k).getTime()!==new Date(2000,m1-1,d1).getTime()) break;
+            span++;
+          }
           const n = counts[d]||0;
-          if(n>0 && bu) return `<td class="ok">`
-            + `<a href="#" class="bookopen" data-room="${escapeHtml(e.room_id)}" data-plan="${escapeHtml(e.plan_id)}" data-date="${escapeHtml(d)}"`
-            + ` title="予約フォームを自動入力して確認画面まで進める（予約の確定はしません）">${n}室</a>`
-            + ` <a href="${bu}" target="_blank" rel="noopener" class="booklink" title="予約カレンダーを開くだけ">↗</a></td>`;
-          return `<td class="${n>0?'ok':'bad'}">${n>0?n+'室':'×'}</td>`;
-        }).join('')+'</tr>';
+          const stay = nights>1 ? `${d}チェックイン・${nights}泊` : d;
+          const label = n>0 ? `${n}室` : '×';
+          if(n>0 && bu){
+            cells += `<td class="ok" colspan="${span}">`
+              + `<a href="#" class="bookopen" data-room="${escapeHtml(e.room_id)}" data-plan="${escapeHtml(e.plan_id)}" data-date="${escapeHtml(d)}"`
+              + ` title="${escapeHtml(stay)}｜予約フォームを自動入力して確認画面まで進める（予約の確定はしません）">${label}</a>`
+              + ` <a href="${bu}" target="_blank" rel="noopener" class="booklink" title="予約カレンダーを開くだけ">↗</a></td>`;
+          } else {
+            cells += `<td class="${n>0?'ok':'bad'}" colspan="${span}" title="${escapeHtml(stay)}">${label}</td>`;
+          }
+          i+=span;
+        }
+        html += `<tr><td class="rowh">${labelCell}</td>${cells}</tr>`;
         if((e.plan_label||'').includes('3連泊') && dates.some(d=>(counts[d]||0)>0)
            && isNotified(entries)) banner=true;
       });
