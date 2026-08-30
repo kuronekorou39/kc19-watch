@@ -264,15 +264,22 @@
 
   <details class="card sect">
     <summary><span class="badge opt">任意</span> ブラウザ操作（予約アシスト）<span class="muted" style="font-weight:400;font-size:13px;">— 使う場合だけ開いて設定</span></summary>
-    <p class="note">「有効化」すると、空室検知時に予約フォームを<b>自動で開いて入力し画面を残します</b>（Botは確定しません＝あなたが最後に確認して予約完了）。
-      対象は<b>「通知する部屋」と同じ範囲</b>です。PCに Chrome または Edge が入っている必要があります。</p>
-    <p class="note">📁 ここで入力した代表者情報の保存先: <code id="settingsPath" style="word-break:break-all;">settings.local.json</code><br>
-      このPCの中だけに保存されます（外部への送信なし。共有設定ファイルや配布物にも含まれません。使うのは予約フォームへの自動入力の時だけです）。</p>
+    <p class="note">「有効化」すると、空室検知時に予約フォームを<b>自動で開いて入力し画面を残します</b>（Botは確定しません＝あなたが最後に確認して予約完了）。PCに Chrome または Edge が入っている必要があります。</p>
+
+    <div class="subhead">⚙ 動作設定（アシスト機能そのものの設定）</div>
     <div class="form-grid">
       <div class="field"><label>自動起動を有効化</label><select data-k="reservation.enabled" data-bool="1"><option value="false">無効</option><option value="true">有効</option></select></div>
-      <div class="field"><label>対象部屋ID (空=通知する部屋と同じ／さらに絞る場合だけ指定)</label><input data-k="reservation.auto_book_room_ids" data-list="1"></div>
-      <div class="field"><label>対象プランID (空=絞らない)</label><input data-k="reservation.auto_book_plan_ids" data-list="1"></div>
       <div class="field"><label>同時に開く窓の上限</label><input type="number" data-k="reservation.max_windows" min="1"></div>
+      <div class="field"><label>ヘッドレス実行</label><select data-k="reservation.headless" data-bool="1"><option value="true">ヘッドレス</option><option value="false">画面あり</option></select></div>
+    </div>
+    <div class="subhead">自動起動の対象部屋（チェックなし＝「通知する部屋」と同じ）</div>
+    <div class="reqlist" id="abRooms"><span class="muted">走査すると部屋の一覧がここに並びます</span></div>
+    <div class="subhead">自動起動の対象プラン（チェックなし＝全プラン）</div>
+    <div class="reqlist" id="abPlans"><span class="muted">プラン設定を読み込むとここに並びます</span></div>
+    <p class="note">部屋・プランのチェックは変更した瞬間に保存されます。</p>
+
+    <div class="subhead" style="margin-top:18px;">📝 予約フォームへ自動入力する値</div>
+    <div class="form-grid">
       <div class="field"><label>チェックイン時刻</label><input data-k="reservation.checkin_time" placeholder="15:00"></div>
       <div class="field"><label>支払い方法</label><select data-k="reservation.payment_method"><option>現地決済</option><option>クレジットカード事前決済</option></select></div>
       <div class="field"><label>大人(男性)人数</label><input type="number" data-k="reservation.adults_male" min="0"></div>
@@ -289,9 +296,8 @@
       <div class="field"><label>都道府県（例: 静岡県）</label><input data-k="reservation.guest.pref"></div>
       <div class="field" style="grid-column:1/-1;"><label>住所（都道府県より下）</label><input data-k="reservation.guest.address"></div>
     </div>
-    <div class="form-grid">
-      <div class="field"><label>ヘッドレス実行</label><select data-k="reservation.headless" data-bool="1"><option value="true">ヘッドレス</option><option value="false">画面あり</option></select></div>
-    </div>
+    <p class="note">📁 ここで入力した値の保存先: <code id="settingsPath" style="word-break:break-all;">settings.local.json</code><br>
+      このPCの中だけに保存されます（外部への送信なし。共有設定ファイルや配布物にも含まれません。使うのは予約フォームへの自動入力の時だけです）。</p>
     <div class="controls" style="margin-top:4px;">
       <button class="primary" onclick="saveSettings()">💾 保存</button>
       <button id="btnTestBooking">🧪 動作テスト（フォームを開いて自動入力）</button>
@@ -377,6 +383,7 @@ function renderStatus(st){
   const targets = Object.values(st.room_status||{});
   const box = $("#matrix");
   renderNotifyRooms(mc.known_rooms||[], mc.notify_room_ids||[]);
+  renderAutoBook(mc, st.reservation_cfg||{});
   if(targets.length){
     // 部屋ごとにグループ化 → 各部屋で プラン×日付 の表。通知対象(🔔)の部屋を先頭に
     const notifySet = new Set((mc.notify_room_ids||[]).map(String));
@@ -589,6 +596,35 @@ function renderNotifyRooms(known, selected){
   }).join("");
   box.querySelectorAll("input[data-notify-room]").forEach(cb=> cb.onchange = saveNotifyRooms);
 }
+// ---- 予約アシストの対象部屋・対象プラン(チェックボックス) ----
+let abSig = null;
+function renderAutoBook(mc, rc){
+  const rooms = mc.known_rooms||[], plans = mc.plans||[];
+  const selR = (rc.auto_book_room_ids||[]).map(String);
+  const selP = (rc.auto_book_plan_ids||[]).map(String);
+  const sig = JSON.stringify([rooms, plans.map(p=>[p.id,p.label]), selR, selP]);
+  if(sig === abSig) return;   // 毎秒のSSE更新で操作中のチェックを壊さない
+  abSig = sig;
+  const chip = (attr, val, label, checked) =>
+    `<label class="chip" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">`
+    + `<input type="checkbox" ${attr}="${escapeHtml(val)}"${checked?" checked":""}>${escapeHtml(label)}</label>`;
+  $("#abRooms").innerHTML = rooms.length
+    ? rooms.map(r=>chip("data-ab-room", String(r.room_id), String(r.label||("部屋"+r.room_id)), selR.includes(String(r.room_id)))).join("")
+    : '<span class="muted">走査すると部屋の一覧がここに並びます</span>';
+  $("#abPlans").innerHTML = plans.length
+    ? plans.map(p=>chip("data-ab-plan", String(p.id), String(p.label||p.id), selP.includes(String(p.id)))).join("")
+    : '<span class="muted">プラン設定を読み込むとここに並びます</span>';
+  document.querySelectorAll("#abRooms input[data-ab-room], #abPlans input[data-ab-plan]")
+    .forEach(cb=> cb.onchange = saveAutoBook);
+}
+async function saveAutoBook(){
+  const rooms = [...document.querySelectorAll("#abRooms input[data-ab-room]:checked")].map(cb=>cb.dataset.abRoom);
+  const plansSel = [...document.querySelectorAll("#abPlans input[data-ab-plan]:checked")].map(cb=>cb.dataset.abPlan);
+  const r = await post("/api/settings", {reservation:{auto_book_room_ids: rooms, auto_book_plan_ids: plansSel}});
+  if(r.ok) toast(`予約アシストの対象を保存しました（部屋: ${rooms.length?rooms.length+"件":"通知対象と同じ"}／プラン: ${plansSel.length?plansSel.length+"件":"全プラン"}）`);
+  else toast("予約アシスト対象の保存に失敗しました");
+}
+
 async function saveNotifyRooms(){
   const ids = [...document.querySelectorAll("#notifyRooms input[data-notify-room]:checked")]
     .map(cb=>cb.dataset.notifyRoom);

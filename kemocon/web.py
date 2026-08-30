@@ -167,6 +167,12 @@ def _build_status() -> dict:
     snap["notify_chat_count"] = len(settings["telegram"]["notify_chat_ids"])
     # 代表者情報などの保存先(設定タブに表示。どこに何が保存されるか利用者が確認できるように)
     snap["settings_file"] = str(config.SETTINGS_FILE)
+    # 予約アシストの対象選択(設定タブのチェックボックス用)
+    res = settings["reservation"]
+    snap["reservation_cfg"] = {
+        "auto_book_room_ids": [str(x) for x in (res.get("auto_book_room_ids") or [])],
+        "auto_book_plan_ids": [str(x) for x in (res.get("auto_book_plan_ids") or [])],
+    }
     # セットアップ状況(設定タブのチェックリスト・走査開始ボタンのゲートに使う)
     snap["setup"] = {
         "required": config.required_status(settings),
