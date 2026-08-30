@@ -127,9 +127,13 @@
     background:rgba(245,183,79,.12); color:var(--warn); border:1px solid rgba(245,183,79,.35); }
   details.adv { margin:12px 0; border:1px dashed var(--border); border-radius:8px; padding:6px 12px; }
   details.adv summary { cursor:pointer; font-size:13px; color:var(--muted); }
-  /* グラフの表示期間切り替え */
-  #chartRange button { padding:3px 10px; font-size:12px; font-weight:600; border-radius:999px; }
-  #chartRange button.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  /* 小さな切り替えボタン(グラフ期間・結果表の表示/絞り込み) */
+  .pillbtns button { padding:3px 10px; font-size:12px; font-weight:600; border-radius:999px; }
+  .pillbtns button.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  /* 結果表の2列表示 */
+  .matrix2col { display:grid; grid-template-columns:repeat(auto-fit,minmax(380px,1fr)); column-gap:16px; }
+  /* まとめ表の行(クリックで展開) */
+  tr.sumrow:hover td { background:rgba(79,140,255,.07); }
   /* 設定タブ: 必須と通知を横並びにしてスクロールを減らす */
   .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
   @media (max-width:900px){ .settings-grid { grid-template-columns:1fr; } }
@@ -159,6 +163,12 @@
       <h2>🏨 空室監視</h2>
       <a id="menuLink" target="_blank" rel="noopener" style="display:none;font-size:13px;">🔗 予約サイトを開く ↗</a>
     </div>
+    <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+      <span class="muted" style="font-size:12px;">表示</span>
+      <span id="viewMode" class="pillbtns" style="display:flex;gap:4px;"></span>
+      <span class="muted" style="font-size:12px;margin-left:8px;">絞り込み</span>
+      <span id="viewFilter" class="pillbtns" style="display:flex;gap:4px;"></span>
+    </div>
     <div id="matrix"><span class="muted">未取得</span></div>
     <div class="banner" id="banner">🔥 3連泊のチェックイン日が空きました！予約可能です</div>
     <div class="statusline" id="statusline"></div>
@@ -178,7 +188,7 @@
     <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">📊 空室数の推移
       <span class="muted" id="chartStats" style="font-weight:400;text-transform:none;letter-spacing:0;"></span>
       <span class="spacer"></span>
-      <span id="chartRange" style="display:flex;gap:4px;"></span>
+      <span id="chartRange" class="pillbtns" style="display:flex;gap:4px;"></span>
     </h2>
     <div id="chart"><span class="muted">データがありません（監視すると蓄積されます）</span></div>
     <div id="legend" class="legend"></div>
@@ -356,6 +366,7 @@ function fmtDur(sec){ if(sec==null) return "--"; const h=Math.floor(sec/3600),m=
 
 function dcmp(a,b){ const [m1,d1]=a.split('/').map(Number),[m2,d2]=b.split('/').map(Number); return m1-m2||d1-d2; }
 function renderStatus(st){
+  LAST_STATUS = st;
   const on = st.monitoring;
   MONITORING = on;
   const pill = $("#pill"); pill.textContent = on?"稼働中":"停止中"; pill.className = "pill "+(on?"on":"off");
@@ -397,67 +408,45 @@ function renderStatus(st){
   renderNotifyRooms(mc.known_rooms||[], mc.notify_room_ids||[]);
   renderAutoBook(mc, st.reservation_cfg||{});
   if(targets.length){
-    // 部屋ごとにグループ化 → 各部屋で プラン×日付 の表。通知対象(🔔)の部屋を先頭に
     const notifySet = new Set((mc.notify_room_ids||[]).map(String));
     const isNotified = entries => !notifySet.size || entries.some(e=>notifySet.has(String(e.room_id)));
     const byRoom = {};
     targets.forEach(e=>{ (byRoom[e.room_label] = byRoom[e.room_label]||[]).push(e); });
-    // 日付列は全部屋で共通にする(部屋ごとに表を分けても列がそろうように)
+    // 日付列は全部屋で共通にする(表示形式が変わっても列がそろうように)
     const allDates=[...new Set(targets.flatMap(e=>e.dates||[]))].sort(dcmp);
-    let html='', banner=false, usedSpan=false, usedNa=false;
-    Object.keys(byRoom)
-      .sort((a,b)=>(notifySet.size&&isNotified(byRoom[a])?0:1)-(notifySet.size&&isNotified(byRoom[b])?0:1))
-      .forEach(room=>{
-      const entries = byRoom[room];
-      const mark = notifySet.size && isNotified(entries)
-        ? ' <span title="空室が出たらTelegram通知します">🔔</span>' : '';
-      html += `<div style="margin-bottom:16px;"><div style="font-weight:700;margin-bottom:6px;">🏨 ${escapeHtml(room)}${mark}</div>`;
-      html += '<table class="matrix"><tr><th class="planh">プラン＼日付</th>'+allDates.map(d=>`<th>${escapeHtml(d)}</th>`).join('')+'</tr>';
-      entries.forEach(e=>{
-        const dates=e.dates||[], counts=e.counts||{}, bu=safeUrl(e.book_url);
-        const nights=+e.nights||1;
-        const labelCell = bu ? `<a href="${bu}" target="_blank" rel="noopener" class="planlink">${escapeHtml(e.plan_label)}</a>` : escapeHtml(e.plan_label);
-        // 結果はチェックイン日の列に出し、連泊の滞在に含まれる残りの日は
-        // 同色の帯+「←」でつなぐ(結果が日付とずれた位置に見えないように)。
-        // 「—」は本当に「そのプランに無い日」だけ
-        let cells='';
-        for(let i=0;i<allDates.length;){
-          const d=allDates[i];
-          if(!dates.includes(d)){ cells+=`<td class="na" title="このプランには無い日">—</td>`; usedNa=true; i++; continue; }
-          let span=1;
-          const [m0,d0]=d.split('/').map(Number);
-          for(let k=1;k<nights && i+k<allDates.length;k++){
-            if(dates.includes(allDates[i+k])) break;   // 次のチェックイン日は飲み込まない
-            const [m1,d1]=allDates[i+k].split('/').map(Number);
-            if(new Date(2000,m0-1,d0+k).getTime()!==new Date(2000,m1-1,d1).getTime()) break;
-            span++;
-          }
-          const n = counts[d]||0;
-          const stay = nights>1 ? `${d}チェックイン・${nights}泊` : d;
-          if(n>0 && bu){
-            cells += `<td class="ok">`
-              + `<a href="#" class="bookopen" data-room="${escapeHtml(e.room_id)}" data-plan="${escapeHtml(e.plan_id)}" data-date="${escapeHtml(d)}"`
-              + ` title="${escapeHtml(stay)}｜予約フォームを自動入力して確認画面まで進める（予約の確定はしません）">${n}室</a>`
-              + ` <a href="${bu}" target="_blank" rel="noopener" class="booklink" title="予約カレンダーを開くだけ">↗</a></td>`;
-          } else {
-            cells += `<td class="${n>0?'ok':'bad'}" title="${escapeHtml(stay)}">${n>0?n+'室':'×'}</td>`;
-          }
-          for(let k=1;k<span;k++){
-            cells += `<td class="${n>0?'spanok':'spanbad'}" title="${escapeHtml(d)}チェックインの予約に含まれる日">←</td>`;
-            usedSpan=true;
-          }
-          i+=span;
-        }
-        html += `<tr><td class="rowh">${labelCell}</td>${cells}</tr>`;
-        if((e.plan_label||'').includes('3連泊') && dates.some(d=>(counts[d]||0)>0)
-           && isNotified(entries)) banner=true;
-      });
-      html += '</table></div>';
-    });
-    if(usedSpan || usedNa){
+    // バナーは表示モード・絞り込みに関係なく判定する
+    const banner = targets.some(e=>(e.plan_label||'').includes('3連泊')
+      && (e.dates||[]).some(d=>((e.counts||{})[d]||0)>0)
+      && (!notifySet.size || notifySet.has(String(e.room_id))));
+    // 並び: 通知対象(🔔)を先頭に → 絞り込みを適用
+    let roomKeys = Object.keys(byRoom)
+      .sort((a,b)=>(notifySet.size&&isNotified(byRoom[a])?0:1)-(notifySet.size&&isNotified(byRoom[b])?0:1));
+    const hasAvail = entries => entries.some(e=>Object.values(e.counts||{}).some(n=>n>0));
+    if(viewFilter==="notify" && notifySet.size) roomKeys = roomKeys.filter(r=>isNotified(byRoom[r]));
+    if(viewFilter==="avail") roomKeys = roomKeys.filter(r=>hasAvail(byRoom[r]));
+
+    const flags = {span:false, na:false};
+    let html='';
+    if(!roomKeys.length){
+      html = `<span class="muted">${viewFilter==="avail"
+        ? "いま空室が出ている部屋はありません（すべて満室）"
+        : "表示対象の部屋がありません"}</span>`;
+    } else if(viewMode==="summary"){
+      html = summaryTable(roomKeys, byRoom, allDates, notifySet, flags);
+    } else {
+      const blocks = roomKeys.map(room=>{
+        const entries = byRoom[room];
+        const mark = notifySet.size && isNotified(entries)
+          ? ' <span title="空室が出たらTelegram通知します">🔔</span>' : '';
+        return `<div style="margin-bottom:16px;"><div style="font-weight:700;margin-bottom:6px;">🏨 ${escapeHtml(room)}${mark}</div>`
+          + roomDetailTable(entries, allDates, flags) + '</div>';
+      }).join('');
+      html = viewMode==="detail2" ? `<div class="matrix2col">${blocks}</div>` : blocks;
+    }
+    if(flags.span || flags.na){
       html += '<div class="note" style="margin-top:-6px;">'
-        + (usedSpan ? '「←」…左のチェックイン日の予約に含まれる日　' : '')
-        + (usedNa ? '「—」…そのプランに無い日' : '') + '</div>';
+        + (flags.span ? '「←」…左のチェックイン日の予約に含まれる日　' : '')
+        + (flags.na ? '「—」…そのプランに無い日' : '') + '</div>';
     }
     box.innerHTML = html;
     $("#banner").style.display = banner ? "block" : "none";
@@ -488,6 +477,116 @@ function renderStatus(st){
     const label = h.type==="available" ? `🎉 ${rl}${pl}${h.date} 空室（${h.aki_num||0}室）` : `😢 ${rl}${pl}${h.date} 満室`;
     return `<div><span class="muted">${h.at}</span> ${label}</div>`;
   }).join("") : '<span class="muted">まだありません</span>';
+}
+
+// ---- 結果表: 表示モード/絞り込み ----
+const VIEW_MODES=[["詳細","detail"],["2列","detail2"],["まとめ","summary"]];
+const VIEW_FILTERS=[["すべて","all"],["🔔通知","notify"],["空室あり","avail"]];
+let viewMode = localStorage.getItem("viewMode")||"detail";
+if(!VIEW_MODES.some(([,v])=>v===viewMode)) viewMode="detail";
+let viewFilter = localStorage.getItem("viewFilter")||"all";
+if(!VIEW_FILTERS.some(([,v])=>v===viewFilter)) viewFilter="all";
+let LAST_STATUS=null;
+const expandedRooms = new Set();   // まとめ表で詳細展開中の部屋
+function renderViewButtons(){
+  $("#viewMode").innerHTML = VIEW_MODES.map(([l,v])=>`<button data-v="${v}" class="${v===viewMode?'active':''}">${l}</button>`).join("");
+  $("#viewFilter").innerHTML = VIEW_FILTERS.map(([l,v])=>`<button data-v="${v}" class="${v===viewFilter?'active':''}">${l}</button>`).join("");
+  document.querySelectorAll("#viewMode button").forEach(b=> b.onclick=()=>{
+    viewMode=b.dataset.v; localStorage.setItem("viewMode",viewMode);
+    renderViewButtons(); if(LAST_STATUS) renderStatus(LAST_STATUS); });
+  document.querySelectorAll("#viewFilter button").forEach(b=> b.onclick=()=>{
+    viewFilter=b.dataset.v; localStorage.setItem("viewFilter",viewFilter);
+    renderViewButtons(); if(LAST_STATUS) renderStatus(LAST_STATUS); });
+}
+
+// 1部屋ぶんの プラン×日付 詳細表。結果はチェックイン日の列に出し、
+// 連泊の滞在に含まれる残りの日は同色の帯+「←」でつなぐ
+function roomDetailTable(entries, allDates, flags){
+  let html = '<table class="matrix"><tr><th class="planh">プラン＼日付</th>'+allDates.map(d=>`<th>${escapeHtml(d)}</th>`).join('')+'</tr>';
+  entries.forEach(e=>{
+    const dates=e.dates||[], counts=e.counts||{}, bu=safeUrl(e.book_url);
+    const nights=+e.nights||1;
+    const labelCell = bu ? `<a href="${bu}" target="_blank" rel="noopener" class="planlink">${escapeHtml(e.plan_label)}</a>` : escapeHtml(e.plan_label);
+    let cells='';
+    for(let i=0;i<allDates.length;){
+      const d=allDates[i];
+      if(!dates.includes(d)){ cells+=`<td class="na" title="このプランには無い日">—</td>`; flags.na=true; i++; continue; }
+      let span=1;
+      const [m0,d0]=d.split('/').map(Number);
+      for(let k=1;k<nights && i+k<allDates.length;k++){
+        if(dates.includes(allDates[i+k])) break;   // 次のチェックイン日は飲み込まない
+        const [m1,d1]=allDates[i+k].split('/').map(Number);
+        if(new Date(2000,m0-1,d0+k).getTime()!==new Date(2000,m1-1,d1).getTime()) break;
+        span++;
+      }
+      const n = counts[d]||0;
+      const stay = nights>1 ? `${d}チェックイン・${nights}泊` : d;
+      if(n>0 && bu){
+        cells += `<td class="ok">`
+          + `<a href="#" class="bookopen" data-room="${escapeHtml(e.room_id)}" data-plan="${escapeHtml(e.plan_id)}" data-date="${escapeHtml(d)}"`
+          + ` title="${escapeHtml(stay)}｜予約フォームを自動入力して確認画面まで進める（予約の確定はしません）">${n}室</a>`
+          + ` <a href="${bu}" target="_blank" rel="noopener" class="booklink" title="予約カレンダーを開くだけ">↗</a></td>`;
+      } else {
+        cells += `<td class="${n>0?'ok':'bad'}" title="${escapeHtml(stay)}">${n>0?n+'室':'×'}</td>`;
+      }
+      for(let k=1;k<span;k++){
+        cells += `<td class="${n>0?'spanok':'spanbad'}" title="${escapeHtml(d)}チェックインの予約に含まれる日">←</td>`;
+        flags.span=true;
+      }
+      i+=span;
+    }
+    html += `<tr><td class="rowh">${labelCell}</td>${cells}</tr>`;
+  });
+  return html + '</table>';
+}
+
+// まとめ表: 1部屋1行、セルは「その日をチェックインにできる全プラン中の最大空室数」。
+// 行クリックでその部屋のプラン別詳細を展開
+function summaryTable(roomKeys, byRoom, allDates, notifySet, flags){
+  let html = '<table class="matrix"><tr><th class="planh">部屋＼日付</th>'+allDates.map(d=>`<th>${escapeHtml(d)}</th>`).join('')+'</tr>';
+  roomKeys.forEach(room=>{
+    const entries = byRoom[room];
+    const notified = notifySet.size && entries.some(e=>notifySet.has(String(e.room_id)));
+    const open = expandedRooms.has(room);
+    const cells = allDates.map(d=>{
+      let best=null, coverN=null;   // best: dをチェックインにできる最良プラン / coverN: 連泊滞在で含む場合の空室数
+      entries.forEach(e=>{
+        const dates=e.dates||[], nights=+e.nights||1;
+        if(dates.includes(d)){
+          const n=(e.counts||{})[d]||0;
+          if(best===null || n>best.n) best={n, e};
+        } else if(nights>1){
+          dates.forEach(d0=>{
+            const [m0,dd0]=d0.split('/').map(Number), [m1,dd1]=d.split('/').map(Number);
+            for(let k=1;k<nights;k++){
+              if(new Date(2000,m0-1,dd0+k).getTime()===new Date(2000,m1-1,dd1).getTime()){
+                const n0=(e.counts||{})[d0]||0;
+                if(coverN===null || n0>coverN) coverN=n0;
+              }
+            }
+          });
+        }
+      });
+      if(best===null){
+        if(coverN!==null){ flags.span=true;
+          return `<td class="${coverN>0?'spanok':'spanbad'}" title="連泊の滞在に含まれる日">←</td>`; }
+        flags.na=true; return `<td class="na">—</td>`;
+      }
+      if(best.n>0){
+        const e=best.e, bu=safeUrl(e.book_url);
+        if(bu) return `<td class="ok"><a href="#" class="bookopen" data-room="${escapeHtml(e.room_id)}" data-plan="${escapeHtml(e.plan_id)}" data-date="${escapeHtml(d)}"`
+          + ` title="[${escapeHtml(e.plan_label)}] 予約フォームを自動入力して確認画面まで進める（予約の確定はしません）">${best.n}室</a></td>`;
+        return `<td class="ok">${best.n}室</td>`;
+      }
+      return `<td class="bad">×</td>`;
+    }).join('');
+    html += `<tr class="sumrow" data-room="${escapeHtml(room)}" style="cursor:pointer;" title="クリックでプラン別の詳細を開閉">`
+      + `<td class="rowh">${open?'▾':'▸'} ${notified?'🔔 ':''}${escapeHtml(room)}</td>${cells}</tr>`;
+    if(open){
+      html += `<tr><td colspan="${allDates.length+1}" style="padding:6px 6px 10px;">${roomDetailTable(entries, allDates, flags)}</td></tr>`;
+    }
+  });
+  return html + '</table>';
 }
 
 function renderLogs(){
@@ -537,7 +636,16 @@ $("#btnInterval").onclick = ()=> post("/api/control/interval",{interval:+$("#int
 let bookingBusy = false;
 $("#matrix").addEventListener("click", async ev=>{
   const a = ev.target.closest("a.bookopen");
-  if(!a) return;
+  if(!a){
+    // まとめ表の行クリック → その部屋のプラン別詳細を開閉
+    const row = ev.target.closest("tr.sumrow");
+    if(row && !ev.target.closest("a")){
+      const room = row.dataset.room;
+      expandedRooms.has(room) ? expandedRooms.delete(room) : expandedRooms.add(room);
+      if(LAST_STATUS) renderStatus(LAST_STATUS);
+    }
+    return;
+  }
   ev.preventDefault();
   if(bookingBusy){ toast("予約フォームを起動中です。少し待ってください"); return; }
   bookingBusy = true;
@@ -802,6 +910,7 @@ loadSettings();
 fetch("/api/logs?after=0").then(r=>r.json()).then(d=>{ allLogs=d.logs; renderLogs(); });
 fetch("/api/status").then(r=>r.json()).then(renderStatus);
 renderRangeButtons();
+renderViewButtons();
 loadHistory(); loadSessions();
 setInterval(()=>{ loadHistory(); loadSessions(); }, 30000);
 connect();
