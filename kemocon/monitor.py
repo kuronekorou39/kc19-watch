@@ -65,6 +65,9 @@ def setup_logging() -> None:
         log.addHandler(fh)
         sh = logging.StreamHandler()
         sh.setFormatter(_ConsoleFormatter())
+        # コンソール(黒い窓)には警告・エラーだけ出す。走査の経過は毎周期流れて
+        # 見苦しいので、ダッシュボードの稼働ログ欄と logs/ のファイルで見る
+        sh.setLevel(logging.WARNING)
         log.addHandler(sh)
         log.addHandler(DashboardLogHandler("bot"))
 

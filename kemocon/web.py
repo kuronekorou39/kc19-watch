@@ -16,6 +16,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from telegram import Update
 
+from kemocon import __version__
+
 from . import booking, config, store
 from .bot import build_application, build_status_text
 from .monitor import controller, setup_logging
@@ -163,6 +165,7 @@ def _build_status() -> dict:
     settings = config.load_settings()
     snap = STATE.snapshot()
     snap["system"] = _system_metrics()
+    snap["version"] = __version__
     snap["status_text"] = build_status_text(settings)
     snap["notify_chat_count"] = len(settings["telegram"]["notify_chat_ids"])
     # 代表者情報などの保存先(設定タブに表示。どこに何が保存されるか利用者が確認できるように)
@@ -544,8 +547,10 @@ def run() -> None:
     if port != preferred:
         print(f"  ※ポート {preferred} は使用中のため {port} を使います")
 
-    print(f"\n  空室監視ダッシュボード → http://{host}:{port}")
-    print("  終了する時は画面右上の「終了」ボタン、またはこの窓を閉じる\n")
+    print(f"\n  空室監視ダッシュボード v{__version__} → http://{host}:{port}")
+    print("  終了する時は画面右上の「終了」ボタン、またはこの窓を閉じる")
+    print("  走査の経過はブラウザ画面の「稼働ログ」欄と logs フォルダで見られます"
+          "(この窓には警告・エラーだけ出ます)\n")
     if getattr(sys, "frozen", False):
         # exe版はダブルクリック起動が前提なので、ブラウザでダッシュボードを自動で開く
         import threading

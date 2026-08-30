@@ -2,9 +2,15 @@
 from __future__ import annotations
 
 import logging
+import warnings
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.warnings import PTBUserWarning
+
+# frozen(exe)環境でビルダー経由でも出る「ApplicationBuilderを使え」警告を抑止
+# (実際にビルダー経由で構築しており、利用者のコンソールに出るだけのノイズ)
+warnings.filterwarnings("ignore", category=PTBUserWarning)
 
 from . import config, store
 from .monitor import controller, notify_room_ids, setup_logging

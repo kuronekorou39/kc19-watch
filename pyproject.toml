@@ -1,6 +1,6 @@
 [project]
 name = "kc19-watch"
-version = "0.4.1"
+version = "0.4.2"
 description = "ホテル空室監視 + Telegram通知 + Webダッシュボード + 自動予約"
 readme = "README.md"
 requires-python = ">=3.11"

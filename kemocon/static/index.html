@@ -137,7 +137,7 @@
 </head>
 <body>
 <header>
-  <h1>🏨 空室監視</h1>
+  <h1>🏨 空室監視 <span class="muted" id="appVer" style="font-weight:400;font-size:12px;"></span></h1>
   <nav class="pagenav">
     <button class="active" data-page="scan">走査</button>
     <button data-page="settings">設定</button>
@@ -353,6 +353,7 @@ function renderStatus(st){
   MONITORING = on;
   const pill = $("#pill"); pill.textContent = on?"稼働中":"停止中"; pill.className = "pill "+(on?"on":"off");
   $("#uptime").textContent = "稼働 " + fmtDur(st.uptime_seconds);
+  if(st.version) $("#appVer").textContent = "v" + st.version;
 
   // セットアップ状況: 必須が揃うまで走査開始をロック
   const setup = st.setup||{}, missing = setup.missing||[];
