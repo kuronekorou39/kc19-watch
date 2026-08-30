@@ -255,9 +255,11 @@
       <button id="btnTest">🔔 テスト通知を送る</button>
     </div>
     <div class="subhead">通知する部屋</div>
-    <p class="note">チェックした部屋の空室だけ通知します（<b>チェックなし＝すべての部屋を通知</b>）。
-      走査はどの場合も全部屋が対象で、履歴・グラフには全部屋のデータが残ります。変更は即保存されます。</p>
-    <div class="reqlist" id="notifyRooms"><span class="muted">走査すると部屋の一覧がここに並びます</span></div>
+    <details class="adv"><summary id="notifySummary">読み込み中…</summary>
+      <p class="note">チェックした部屋の空室だけ通知します（<b>チェックなし＝すべての部屋を通知</b>）。
+        走査はどの場合も全部屋が対象で、履歴・グラフには全部屋のデータが残ります。変更は即保存されます。</p>
+      <div class="reqlist" id="notifyRooms"><span class="muted">走査すると部屋の一覧がここに並びます</span></div>
+    </details>
   </div>
 
 </div><!-- /settings-grid -->
@@ -272,11 +274,13 @@
       <div class="field"><label>同時に開く窓の上限</label><input type="number" data-k="reservation.max_windows" min="1"></div>
       <div class="field"><label>ヘッドレス実行</label><select data-k="reservation.headless" data-bool="1"><option value="true">ヘッドレス</option><option value="false">画面あり</option></select></div>
     </div>
-    <div class="subhead">自動起動の対象部屋（チェックなし＝「通知する部屋」と同じ）</div>
-    <div class="reqlist" id="abRooms"><span class="muted">走査すると部屋の一覧がここに並びます</span></div>
-    <div class="subhead">自動起動の対象プラン（チェックなし＝全プラン）</div>
-    <div class="reqlist" id="abPlans"><span class="muted">プラン設定を読み込むとここに並びます</span></div>
-    <p class="note">部屋・プランのチェックは変更した瞬間に保存されます。</p>
+    <div class="subhead">自動起動の対象（チェックは変更した瞬間に保存されます）</div>
+    <details class="adv"><summary id="abRoomsSummary">対象部屋: 読み込み中…</summary>
+      <div class="reqlist" id="abRooms" style="margin-top:8px;"><span class="muted">走査すると部屋の一覧がここに並びます</span></div>
+    </details>
+    <details class="adv"><summary id="abPlansSummary">対象プラン: 読み込み中…</summary>
+      <div class="reqlist" id="abPlans" style="margin-top:8px;"><span class="muted">プラン設定を読み込むとここに並びます</span></div>
+    </details>
 
     <div class="subhead" style="margin-top:18px;">📝 予約フォームへ自動入力する値</div>
     <div class="form-grid">
@@ -582,11 +586,14 @@ function renderNotifyRooms(known, selected){
   const sig = JSON.stringify([known, selected]);
   if(sig === notifyRoomsSig) return;   // 毎秒のSSE更新で操作中のチェックを壊さない
   notifyRoomsSig = sig;
+  const sel = new Set(selected.map(String));
+  $("#notifySummary").textContent = sel.size
+    ? `${sel.size}部屋だけ通知（クリックで変更）`
+    : "すべての部屋を通知（クリックで絞り込み）";
   if(!known.length){
     box.innerHTML = '<span class="muted">走査すると部屋の一覧がここに並びます</span>';
     return;
   }
-  const sel = new Set(selected.map(String));
   box.innerHTML = known.map(r=>{
     const rid = escapeHtml(String(r.room_id));
     const checked = sel.has(String(r.room_id)) ? " checked" : "";
@@ -605,6 +612,10 @@ function renderAutoBook(mc, rc){
   const sig = JSON.stringify([rooms, plans.map(p=>[p.id,p.label]), selR, selP]);
   if(sig === abSig) return;   // 毎秒のSSE更新で操作中のチェックを壊さない
   abSig = sig;
+  $("#abRoomsSummary").textContent = selR.length
+    ? `対象部屋: ${selR.length}部屋に絞り込み中` : "対象部屋: 「通知する部屋」と同じ";
+  $("#abPlansSummary").textContent = selP.length
+    ? `対象プラン: ${selP.length}件に絞り込み中` : "対象プラン: 全プラン";
   const chip = (attr, val, label, checked) =>
     `<label class="chip" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">`
     + `<input type="checkbox" ${attr}="${escapeHtml(val)}"${checked?" checked":""}>${escapeHtml(label)}</label>`;
@@ -644,6 +655,7 @@ async function loadSettings(){
     else if(el.dataset.bool) v = String(v);
     if(el.dataset.k==="telegram.bot_token"){ el.placeholder=v; return; } // マスク済み。触らない限り送らない
     el.value = v;
+    el.dataset.orig = String(el.value);   // 保存時に「触った項目だけ」送るための読込時の値
   });
   $("#interval").value = getByPath(s,"monitor.interval_seconds")||300;
   renderTargets(s);
@@ -654,6 +666,9 @@ async function saveSettings(){
   document.querySelectorAll("[data-k]").forEach(el=>{
     let v = el.value;
     if(el.dataset.k==="telegram.bot_token" && !v.trim()) return; // 空なら送らない
+    // 画面で触っていない項目は送らない(この画面を開いた後に裏で変わった
+    // 設定を、古い表示値で巻き戻してしまわないため)
+    if(el.dataset.orig !== undefined && String(el.value) === el.dataset.orig) return;
     if(el.dataset.list) v = v.split(",").map(x=>x.trim()).filter(Boolean);
     else if(el.dataset.json){ try{ v=JSON.parse(v||"{}"); }catch(e){ toast("JSONが不正: "+el.dataset.k); throw e; } }
     else if(el.dataset.bool) v = (v==="true");
