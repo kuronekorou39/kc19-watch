@@ -270,15 +270,16 @@ async def api_check() -> JSONResponse:
 
 
 @app.get("/api/history")
-async def api_history(limit: int = 8000, hours: int = 72) -> JSONResponse:
-    """空室数の推移(グラフ用)。直近 hours 時間ぶんを部屋ごとに返す。
+async def api_history(limit: int = 8000, hours: float = 24) -> JSONResponse:
+    """空室数の推移(グラフ用)。直近 hours 時間ぶんを部屋ごとに返す(hours<=0で全期間)。
 
     サンプルは変化時のみ記録されるため、窓の開始時点の値は窓より前の最後の
     記録から引き継ぐ。全期間0室の部屋は series から省いて件数だけ返す
     (全部屋走査では0室の線が大半で、肝心の空室が見えなくなるため)。
     """
     samples = store.get_samples(limit)
-    cutoff = (datetime.now() - timedelta(hours=max(1, hours))).strftime("%Y-%m-%dT%H:%M:%S")
+    cutoff = ((datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
+              if hours > 0 else "")  # ""はすべてのISO時刻より小さい=全期間
     rooms: list[str] = []
     per_ts: dict[str, dict[str, int]] = {}
     for s in samples:

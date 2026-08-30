@@ -127,6 +127,9 @@
     background:rgba(245,183,79,.12); color:var(--warn); border:1px solid rgba(245,183,79,.35); }
   details.adv { margin:12px 0; border:1px dashed var(--border); border-radius:8px; padding:6px 12px; }
   details.adv summary { cursor:pointer; font-size:13px; color:var(--muted); }
+  /* グラフの表示期間切り替え */
+  #chartRange button { padding:3px 10px; font-size:12px; font-weight:600; border-radius:999px; }
+  #chartRange button.active { background:var(--accent); border-color:var(--accent); color:#fff; }
   /* 設定タブ: 必須と通知を横並びにしてスクロールを減らす */
   .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
   @media (max-width:900px){ .settings-grid { grid-template-columns:1fr; } }
@@ -172,12 +175,16 @@
   </div>
 
   <section class="card" style="margin-top:16px;">
-    <h2>📊 空室数の推移 <span class="muted" id="chartStats" style="font-weight:400;text-transform:none;letter-spacing:0;"></span></h2>
+    <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">📊 空室数の推移
+      <span class="muted" id="chartStats" style="font-weight:400;text-transform:none;letter-spacing:0;"></span>
+      <span class="spacer"></span>
+      <span id="chartRange" style="display:flex;gap:4px;"></span>
+    </h2>
     <div id="chart"><span class="muted">データがありません（監視すると蓄積されます）</span></div>
     <div id="legend" class="legend"></div>
   </section>
 
-  <div class="grid">
+  <div class="grid" style="margin-top:16px;">
     <div class="card">
       <h2>📈 変化履歴</h2>
       <div class="history" id="history"><span class="muted">まだありません</span></div>
@@ -732,15 +739,29 @@ function toast(msg, ms){ const t=$("#toast"); t.textContent=msg; t.classList.add
 
 // ---- 空室数の推移グラフ ----
 const CHART_COLORS = ['#4f8cff','#f5a623','#2fbf71','#b57bee','#ff5d6c','#00b8d4','#e0729a','#8bc34a'];
+// 表示期間の切り替え(選択はブラウザに記憶)
+const CHART_RANGES = [["30分",0.5],["3時間",3],["24時間",24],["3日",72],["全部",0]];
+let chartHours = (()=>{ const v = localStorage.getItem("chartHours"); return v===null ? 24 : +v; })();
+if(!CHART_RANGES.some(([,h])=>h===chartHours)) chartHours = 24;
+function rangeLabel(h){ return !h ? "全期間" : (h<1 ? Math.round(h*60)+"分" : (h>24&&h%24===0 ? (h/24)+"日" : h+"時間")); }
+function renderRangeButtons(){
+  $("#chartRange").innerHTML = CHART_RANGES.map(([l,h])=>
+    `<button data-h="${h}" class="${h===chartHours?'active':''}">${l}</button>`).join("");
+  document.querySelectorAll("#chartRange button").forEach(b=> b.onclick = ()=>{
+    chartHours = +b.dataset.h; localStorage.setItem("chartHours", chartHours);
+    renderRangeButtons(); loadHistory();
+  });
+}
 function fmtT(t){ const d=new Date(t),p=n=>String(n).padStart(2,'0'); return `${d.getMonth()+1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`; }
 function renderChart(data){
   const el=$("#chart"), leg=$("#legend");
   const pts=(data.points||[]).map(p=>({t:new Date(p.ts).getTime(),p})).filter(x=>!isNaN(x.t)).sort((a,b)=>a.t-b.t);
   const series=data.series||[];
-  const wh = data.window_hours||72;
+  const wh = +data.window_hours || 0;
+  const rl = wh ? "直近" + rangeLabel(wh) : "全期間";
   if(pts.length<1||!series.length){
     el.innerHTML = pts.length
-      ? `<span class="muted">直近${wh}時間はすべて満室（0室）でした（記録は続いています）</span>`
+      ? `<span class="muted">${rl}はすべて満室（0室）でした（記録は続いています）</span>`
       : '<span class="muted">データがありません（監視すると蓄積されます）</span>';
     leg.innerHTML=''; return;
   }
@@ -761,7 +782,7 @@ function renderChart(data){
   s+='</svg>'; el.innerHTML=s;
   leg.innerHTML=series.map((se,i)=>`<span><i style="background:${CHART_COLORS[i%CHART_COLORS.length]}"></i>${escapeHtml(se.label)}</span>`).join('')
     + (data.zero_rooms ? `<span class="muted">ほか${data.zero_rooms}部屋は0室のまま（非表示）</span>` : '');
-  if(data.stats&&data.stats.first_ts) $("#chartStats").textContent=`（直近${wh}時間・記録は ${fmtT(new Date(data.stats.first_ts).getTime())} から ${data.stats.sample_rows}点）`;
+  if(data.stats&&data.stats.first_ts) $("#chartStats").textContent=`（${rl}・記録は ${fmtT(new Date(data.stats.first_ts).getTime())} から ${data.stats.sample_rows}点）`;
 }
 function renderSessions(sessions){
   const el=$("#sessions");
@@ -773,13 +794,14 @@ function renderSessions(sessions){
     return `<div><span class="muted">${a}</span> 〜 ${end} <span class="muted">(${dur})</span></div>`;
   }).join('');
 }
-function loadHistory(){ fetch("/api/history").then(r=>r.json()).then(renderChart).catch(()=>{}); }
+function loadHistory(){ fetch("/api/history?hours="+chartHours).then(r=>r.json()).then(renderChart).catch(()=>{}); }
 function loadSessions(){ fetch("/api/sessions").then(r=>r.json()).then(d=>renderSessions(d.sessions)).catch(()=>{}); }
 
 // ---- init ----
 loadSettings();
 fetch("/api/logs?after=0").then(r=>r.json()).then(d=>{ allLogs=d.logs; renderLogs(); });
 fetch("/api/status").then(r=>r.json()).then(renderStatus);
+renderRangeButtons();
 loadHistory(); loadSessions();
 setInterval(()=>{ loadHistory(); loadSessions(); }, 30000);
 connect();
