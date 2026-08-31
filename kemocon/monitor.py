@@ -276,9 +276,16 @@ def _autobook_message(e: dict, rep: dict) -> str:
     """自動起動した予約フォームの結果メッセージ。"""
     status = rep.get("status")
     nights = e.get("nights")
-    text = ("🧾 予約フォームを自動で開きました（要確認）\n\n"
-            f"◆{e['room_label']}\n　[{e['plan_label']}] {e['date']}"
-            f"（{str(nights) + '泊' if nights else ''}）\n")
+    where = (f"◆{e['room_label']}\n　[{e['plan_label']}] {e['date']}"
+             f"（{str(nights) + '泊' if nights else ''}）\n")
+    if status == "booked":
+        return ("🎉✅ 予約を確定しました！\n\n" + where
+                + "\nブラウザ窓と確認メールで内容を確認してください。"
+                "\nキャンセルする場合は予約サイトの規定に従ってください。")
+    if status == "book_failed":
+        return ("⚠ 確定ボタンを押しましたが、完了画面を確認できませんでした\n\n" + where
+                + "\nブラウザ窓で予約が成立したか必ず確認してください（二重予約に注意）。")
+    text = ("🧾 予約フォームを自動で開きました（要確認）\n\n" + where)
     if status in ("ready", "confirm_ready", "confirm_blocked"):
         text += f"\n✅ 自動入力: {len(rep.get('filled', []))}項目"
         empty = rep.get("empty_required", [])
@@ -452,7 +459,10 @@ class MonitorController:
         plan_filter = {str(x) for x in (res.get("auto_book_plan_ids") or [])}
         max_windows = int(res.get("max_windows", 4))
         opened = 0
-        for e in [ev for ev in events if ev["type"] == "available"]:
+        # 泊数の多いプラン(3連泊)から先に処理する(自動確定の上限があるため優先度が重要)
+        avail = sorted([ev for ev in events if ev["type"] == "available"],
+                       key=lambda ev: -(int(ev.get("nights") or 1)))
+        for e in avail:
             if opened >= max_windows:
                 break
             if notify and e["room_id"] not in notify:
@@ -466,17 +476,27 @@ class MonitorController:
                 continue
             self._autobooked.add(tkey)
             month, day = (int(x) for x in e["date"].split("/"))
-            log.info("🧾 予約フォーム自動起動: %s [%s] %s", e["room_label"], e["plan_label"], e["date"])
+            auto_c = booking.auto_confirm_allowed(res)
+            log.info("🧾 予約フォーム自動起動%s: %s [%s] %s",
+                     "(確定まで)" if auto_c else "", e["room_label"], e["plan_label"], e["date"])
             try:
                 rep = await booking.prepare_booking_async(
                     mon, res, e["plan_id"], e["room_id"], day, year=mon["target_year"],
                     month=month, nights=e.get("nights"),
                     headless=res.get("headless", False), keep_open=True,
-                    proceed_to_confirm=res.get("proceed_to_confirm", True))
+                    proceed_to_confirm=res.get("proceed_to_confirm", True),
+                    auto_confirm=auto_c)
             except Exception as exc:  # noqa: BLE001
                 log.error("予約フォーム起動失敗: %s", exc)
                 continue
             opened += 1
+            if rep.get("status") == "booked":
+                # 確定件数を記録(上限に達したら以降は確認画面止まりに戻る)
+                res["auto_confirmed_count"] = int(res.get("auto_confirmed_count", 0)) + 1
+                config.merge_and_save({"reservation":
+                                       {"auto_confirmed_count": res["auto_confirmed_count"]}})
+                log.info("✅ 予約確定 (%d/%d件)", res["auto_confirmed_count"],
+                         int(res.get("auto_confirm_max", 1)))
             await self._send(settings, _autobook_message(e, rep))
 
     async def _send(self, settings: dict, text: str) -> None:

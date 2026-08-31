@@ -66,6 +66,57 @@ async def prepare_booking_async(*args, **kwargs) -> dict[str, Any]:
     return await fut
 
 
+def auto_confirm_allowed(res: dict) -> bool:
+    """自動確定してよいか(有効かつ上限未達)。"""
+    return (bool(res.get("auto_confirm"))
+            and int(res.get("auto_confirmed_count", 0)) < int(res.get("auto_confirm_max", 1)))
+
+
+# 最終確定ボタンの探索順(誤爆防止のため「予約する」より具体的な文言を先に試す)
+_FINAL_SELECTORS = (
+    "input[value*='この内容で予約']", "button:has-text('この内容で予約')",
+    "input[value*='予約を確定']", "button:has-text('予約を確定')",
+    "input[value*='上記の内容で']", "button:has-text('上記の内容で')",
+    "input[value*='予約する']", "button:has-text('予約する')",
+)
+_FINAL_NG = ("戻る", "修正", "キャンセル", "取消", "変更")
+
+# 予約完了ページの判定文言
+_BOOKED_MARKERS = ("予約が完了", "予約を受け付け", "受付番号", "予約番号",
+                   "ご予約ありがとう", "完了しました")
+
+
+def _submit_labels(page) -> list[str]:
+    """ページ上のボタン類のラベル一覧(確認画面の構成を記録して精度改善に使う)。"""
+    try:
+        return page.eval_on_selector_all(
+            "input[type=submit], input[type=button], button",
+            "els=>els.map(e=>(e.value||e.textContent||'').trim()).filter(Boolean)")
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _click_final_confirm(page, report: dict) -> bool:
+    """確認画面の最終確定ボタンを押す。押せたらTrue(=本予約の確定操作)。
+
+    「戻る」「修正」等の文言を含むボタンは候補から除外する。
+    """
+    for sel in _FINAL_SELECTORS:
+        try:
+            loc = page.locator(sel)
+            for i in range(loc.count()):
+                cand = loc.nth(i)
+                label = (cand.get_attribute("value") or cand.text_content() or "").strip()
+                if any(ng in label for ng in _FINAL_NG):
+                    continue
+                cand.click()
+                report["clicked_final"] = label
+                return True
+        except Exception as exc:  # noqa: BLE001
+            report["errors"].append(f"確定ボタン({sel}): {exc}")
+    return False
+
+
 def _watch_session(s: dict) -> None:
     """handoffで残したブラウザ窓が閉じられるまで待ち、閉じられたら後片付けする。
 
@@ -202,12 +253,17 @@ def _apply(page, item: dict, report: dict) -> None:
 def prepare_booking(mon: dict, res: dict, plan_id: str, room_id: str, day: int,
                     year: str | None = None, month: int = 11, nights: int | None = None,
                     headless: bool | None = None, keep_open: bool = True,
-                    proceed_to_confirm: bool = False) -> dict[str, Any]:
+                    proceed_to_confirm: bool = False,
+                    auto_confirm: bool = False) -> dict[str, Any]:
     """予約フォームを開いて行けるところまで自動入力し、画面を残して人に渡す。
 
-    Botは確認/確定ボタンを押さない。フォーム構造が違っても落ちずに報告する。
+    既定ではBotは最終確定ボタンを押さない(確認画面まで)。auto_confirm=True の
+    場合のみ「予約する」まで押して本予約を確定する(呼び出し元が上限を管理)。
+    フォーム構造が違っても落ちずに報告する。
     戻り値: {status, url, filled[], skipped_missing[], empty_required[], errors[]}
-      status = "ready"(入力完了・要ユーザー確定) / "full"(満室) / "no_form" / "error"
+      status = "ready"(入力完了・要ユーザー確定) / "confirm_ready"(確認画面到達) /
+               "booked"(確定完了) / "book_failed"(確定を押したが完了未確認) /
+               "full"(満室) / "no_form" / "error"
     """
     from playwright.sync_api import sync_playwright
 
@@ -266,6 +322,8 @@ def prepare_booking(mon: dict, res: dict, plan_id: str, room_id: str, day: int,
                 if clicked:
                     page.wait_for_timeout(3500)
                     body2 = page.inner_text("body")
+                    # 確認画面のボタン構成を記録(確定ボタン探索の精度改善に使う)
+                    report["confirm_buttons"] = _submit_labels(page)
                     if any(k in body2 for k in ("この内容で予約", "予約を確定", "予約内容の確認", "上記の内容で")):
                         report["status"] = "confirm_ready"      # 内容確認ページに到達(あとは予約完了のみ)
                     elif "内容確認" in body2 and "予約完了" in body2:
@@ -273,6 +331,20 @@ def prepare_booking(mon: dict, res: dict, plan_id: str, room_id: str, day: int,
                     else:
                         report["status"] = "confirm_blocked"    # 入力不備等で止まった
                         report["confirm_hint"] = re.sub(r"\s+", " ", body2)[:200]
+                    # ⚠ 自動確定: ここで「予約する」を押すと本予約が確定する
+                    if auto_confirm and report["status"] == "confirm_ready":
+                        if _click_final_confirm(page, report):
+                            page.wait_for_timeout(5000)
+                            body3 = page.inner_text("body")
+                            if any(k in body3 for k in _BOOKED_MARKERS):
+                                report["status"] = "booked"
+                            else:
+                                report["status"] = "book_failed"   # 押したが完了画面を確認できず
+                                report["confirm_hint"] = re.sub(r"\s+", " ", body3)[:200]
+                        else:
+                            report["errors"].append(
+                                "確定ボタンが見つからず確認画面で停止(ボタン: "
+                                + "、".join(report.get("confirm_buttons", [])[:8]) + ")")
                 else:
                     report["errors"].append("「確認画面へ」ボタンが見つからない")
 
@@ -282,7 +354,8 @@ def prepare_booking(mon: dict, res: dict, plan_id: str, room_id: str, day: int,
 
     # handoff: フォームが出ていて keep_open なら画面を残す(確認画面まで進んだ/止まった場合も)。
     # セッションは prepare_booking_async のスレッドが窓が閉じられるまで見届けて片付ける
-    if keep_open and report["status"] in ("ready", "confirm_ready", "confirm_blocked"):
+    if keep_open and report["status"] in ("ready", "confirm_ready", "confirm_blocked",
+                                          "booked", "book_failed"):
         report["_session"] = {"p": p, "browser": browser, "page": page}
         report["handoff_open"] = True
     else:

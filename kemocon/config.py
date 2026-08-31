@@ -86,8 +86,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "auto_book_room_ids": [],
         "auto_book_plan_ids": [],
         "max_windows": 4,                 # 1チェックで自動起動するフォーム窓の上限(取りすぎ防止)
-        # Trueで「確認画面へ」まで自動で進める(残りは「予約する」1クリックのみ)。Botは予約完了は押さない
+        # Trueで「確認画面へ」まで自動で進める(残りは「予約する」1クリックのみ)
         "proceed_to_confirm": True,
+        # ⚠ 最後の「予約する」まで自動で押す(=本予約が確定する)。既定OFF
+        "auto_confirm": False,
+        # 自動確定は合計この件数まで。達したら以降は従来どおり確認画面止まり
+        # (空きラッシュ時に複数予約が確定してしまう事故の防止)
+        "auto_confirm_max": 1,
+        # 自動確定に成功した件数(アプリが記録)。リセットしたい場合は上限を増やすか、この値を0に
+        "auto_confirmed_count": 0,
         "checkin_time": "15:00",          # ck_hourmin(チェックイン時刻)
         # 予約する大人の人数(man_1 + woman_1 = 予約人数)。合計が対象プランの許容人数内で
         "adults_male": 2,

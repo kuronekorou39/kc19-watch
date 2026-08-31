@@ -175,6 +175,9 @@ def _build_status() -> dict:
     snap["reservation_cfg"] = {
         "auto_book_room_ids": [str(x) for x in (res.get("auto_book_room_ids") or [])],
         "auto_book_plan_ids": [str(x) for x in (res.get("auto_book_plan_ids") or [])],
+        "auto_confirm": bool(res.get("auto_confirm")),
+        "auto_confirm_max": int(res.get("auto_confirm_max", 1)),
+        "auto_confirmed_count": int(res.get("auto_confirmed_count", 0)),
     }
     # セットアップ状況(設定タブのチェックリスト・走査開始ボタンのゲートに使う)
     snap["setup"] = {
@@ -370,17 +373,35 @@ async def api_booking_open(request: Request) -> JSONResponse:
     if not target or date not in (target.get("dates") or []):
         return JSONResponse({"ok": False, "error": "対象が見つかりません。画面を更新してください"})
     month, day = (int(x) for x in date.split("/"))
-    log.info("🧾 予約フォーム手動起動: %s [%s] %s", target["room_label"], target["plan_label"], date)
+    auto_c = booking.auto_confirm_allowed(res)
+    log.info("🧾 予約フォーム手動起動%s: %s [%s] %s",
+             "(確定まで)" if auto_c else "", target["room_label"], target["plan_label"], date)
     try:
         rep = await booking.prepare_booking_async(
             mon, res, plan_id, room_id, day, year=mon["target_year"], month=month,
             nights=target.get("nights"), headless=False, keep_open=True,
-            proceed_to_confirm=res.get("proceed_to_confirm", True))
+            proceed_to_confirm=res.get("proceed_to_confirm", True),
+            auto_confirm=auto_c)
     except Exception as exc:  # noqa: BLE001
         log.error("予約フォーム起動失敗: %s", exc)
         return JSONResponse({"ok": False, "error": str(exc)})
+    if rep.get("status") == "booked":
+        cnt = int(res.get("auto_confirmed_count", 0)) + 1
+        config.merge_and_save({"reservation": {"auto_confirmed_count": cnt}})
+        log.info("✅ 予約確定(手動起動) (%d/%d件)", cnt, int(res.get("auto_confirm_max", 1)))
+        # Telegramにも知らせる(重要イベントなので画面の前にいなくても分かるように)
+        if controller.bot:
+            msg = (f"🎉✅ 予約を確定しました！\n\n◆{target['room_label']}\n"
+                   f"　[{target['plan_label']}] {date}\n\n"
+                   "ブラウザ窓と確認メールで内容を確認してください。")
+            for cid in settings["telegram"]["notify_chat_ids"]:
+                try:
+                    await controller.bot.send_message(chat_id=cid, text=msg)
+                except Exception as exc:  # noqa: BLE001
+                    log.error("Telegram送信失敗 chat_id=%s: %s", cid, exc)
     return JSONResponse({"ok": True, "report": {k: rep.get(k) for k in
-        ("status", "url", "filled", "empty_required", "skipped_missing", "errors", "handoff_open")}})
+        ("status", "url", "filled", "empty_required", "skipped_missing", "errors",
+         "handoff_open", "clicked_final", "confirm_hint")}})
 
 
 @app.post("/api/control/test-booking")
