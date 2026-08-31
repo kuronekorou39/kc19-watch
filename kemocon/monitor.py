@@ -70,6 +70,15 @@ def setup_logging() -> None:
         sh.setLevel(logging.WARNING)
         log.addHandler(sh)
         log.addHandler(DashboardLogHandler("bot"))
+        # PTB(telegram)・httpx のログもファイル+画面ログへ回す。素通しのままだと
+        # rootの緊急ハンドラ経由でコンソールに出てしまい、Telegram側の一時障害
+        # (502等・自動リトライで復帰する)のトレースバックが黒い窓に積まれる
+        for name in ("telegram", "httpx"):
+            lg = logging.getLogger(name)
+            lg.setLevel(logging.WARNING)
+            lg.propagate = False
+            lg.addHandler(fh)
+            lg.addHandler(DashboardLogHandler("bot"))
 
     http_log.setLevel(logging.INFO)
     http_log.propagate = False
