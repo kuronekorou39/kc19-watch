@@ -47,7 +47,8 @@ _EMOJI_RE = re.compile(
 
 class _ConsoleFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        return _EMOJI_RE.sub("", super().format(record)).lstrip()
+        # 絵文字を抜いた跡に残る余分な空白も畳む
+        return re.sub(r" {2,}", " ", _EMOJI_RE.sub("", super().format(record))).strip()
 
 
 def setup_logging() -> None:
@@ -64,7 +65,9 @@ def setup_logging() -> None:
         fh.setFormatter(fmt)
         log.addHandler(fh)
         sh = logging.StreamHandler()
-        sh.setFormatter(_ConsoleFormatter())
+        # いつ起きたか分かるよう日時を付ける(コンソールに出るのは警告・エラーのみ)
+        sh.setFormatter(_ConsoleFormatter("%(asctime)s %(levelname)s %(message)s",
+                                          datefmt="%m/%d %H:%M:%S"))
         # コンソール(黒い窓)には警告・エラーだけ出す。走査の経過は毎周期流れて
         # 見苦しいので、ダッシュボードの稼働ログ欄と logs/ のファイルで見る
         sh.setLevel(logging.WARNING)
